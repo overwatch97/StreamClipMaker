@@ -44,10 +44,23 @@ def get_facecam_layout(emotion_score: float, profile: Dict = None):
 
     fc_box = [default_x, default_y, default_x + cam_w_norm, default_y + cam_h_norm]
     
+    # Default to Bottom Right (x=1.0, y=1.0 in remaining space)
     x_expr = "W-w-20"
     y_expr = "H-h-20"
     
-    if "spatial_rules" in profile:
+    # 1. Check for new 'hud_safe_zones' schema
+    if "hud_safe_zones" in profile and profile["hud_safe_zones"]:
+        sz = profile["hud_safe_zones"][0]
+        # Calculate center of the safe zone to anchor the facecam
+        center_x = (sz.get("x_min", 0.0) + sz.get("x_max", 1.0)) / 2.0
+        center_y = (sz.get("y_min", 0.0) + sz.get("y_max", 1.0)) / 2.0
+        
+        # Map 0-1 safe zone to (W-w) percentage
+        x_expr = f"(W-w)*{center_x}"
+        y_expr = f"(H-h)*{center_y}"
+        
+    # 2. Fallback to legacy 'spatial_rules' schema
+    elif "spatial_rules" in profile:
         rules = profile["spatial_rules"]
         dead_zones = rules.get("dead_zones", [])
         safe_zones = rules.get("safe_zones", [])

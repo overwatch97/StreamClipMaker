@@ -6,55 +6,63 @@ import editing_brain
 def expand(event: DetectedEvent, timeline: List[TimelineSecond], profile: GameProfile, 
            transcript_data: List[Dict]) -> HighlightCandidate:
     """
-    Expands a clip boundary from a detected event peak.
-    Uses context_rules for margins, stops on ignore_states, and snaps to transcript boundaries.
+    Expands a clip boundary from a detected event peak using human-editor logic:
+    CAUSE (Hook) -> ACTION (Main Event) -> RESULT (Payoff/Reaction).
     """
     rules = profile.context_rules
-    buffer_start = rules.get("expansion_buffer_start", 8.0)
-    buffer_end = rules.get("expansion_buffer_end", 8.0)
-    min_dur = rules.get("min_clip_duration", 15.0)
+    max_cause_lookback = 5.0 # Max seconds to look back for a hook
+    max_result_lookahead = 10.0 # Max seconds to look forward for a payoff
+    min_dur = rules.get("min_clip_duration", 5.0) # Social shorts can be very short
     max_dur = rules.get("max_clip_duration", 60.0)
 
-    # Find the index in the timeline
     timestamps = [s.timestamp for s in timeline]
     try:
         peak_idx = timestamps.index(event.timestamp)
     except ValueError:
-        # Fallback to closest
         peak_idx = int(np.argmin([abs(t - event.timestamp) for t in timestamps]))
 
-    # Grow backward for setup
+    # --- 1. Find CAUSE (Hook / Setup) ---
+    # Look backwards for a spike in speech (someone starting to talk loudly) or visual motion.
     start_idx = peak_idx
+    cause_found = False
     while start_idx > 0:
         current = timeline[start_idx - 1]
         if current.is_ignore_state:
             break
         
         elapsed = event.timestamp - current.timestamp
-        if elapsed > buffer_start + 20.0: # Hard cap on setup
+        if elapsed > max_cause_lookback:
             break
             
-        # Keep growing if score is high (action happens before the peak)
-        # OR within a tiny wind-up window (max 1.5s) to ensure the hook starts instantly.
-        # We ignore the large 'buffer_start' for blind backward expansion to prevent 0.15s swipe-away rate.
-        windup_window = min(1.5, buffer_start)
-        if current.fused_score > 0.3 or elapsed <= windup_window:
+        # Hook criteria: A sudden speech spike or high overall score *before* the action hits.
+        if current.speech_score > 0.4 or current.fused_score > 0.5:
+            start_idx -= 1
+            cause_found = True
+        elif not cause_found and elapsed <= 1.0:
+            # Micro-setup: If we haven't found a strong cause, at least step back a tiny bit
             start_idx -= 1
         else:
             break
 
-    # Grow forward for resolution
+    # --- 2. Find RESULT (Payoff / Reaction) ---
+    # Look forwards for emotion spikes (laugh/scream) or speech resolving.
     end_idx = peak_idx
+    result_found = False
     while end_idx < len(timeline) - 1:
         current = timeline[end_idx + 1]
         if current.is_ignore_state:
             break
             
         elapsed = current.timestamp - event.timestamp
-        if elapsed > buffer_end + 30.0: # Hard cap on resolution
+        if elapsed > max_result_lookahead:
             break
             
-        if current.fused_score > 0.3 or elapsed <= buffer_end:
+        # Reaction criteria: High emotion score (facecam) or prolonged speech.
+        if current.emotion_score > 0.4 or current.speech_score > 0.3:
+            end_idx += 1
+            result_found = True
+        elif not result_found and elapsed <= 2.0:
+            # Let the action breathe a little before cutting if no immediate reaction
             end_idx += 1
         else:
             break
@@ -63,21 +71,18 @@ def expand(event: DetectedEvent, timeline: List[TimelineSecond], profile: GamePr
     start_time = timeline[start_idx].timestamp
     end_time = timeline[end_idx].timestamp
     
+    # Precise snapping: Hook must snap cleanly to start of sentence. 
+    # Result must snap cleanly to end of sentence.
     start_time = editing_brain.find_nearest_word_boundary(start_time, transcript_data, search_window=2.0)
     end_time = editing_brain.find_nearest_word_boundary(end_time, transcript_data, search_window=3.0)
 
-    # Final Clamp
+    # Force minimum duration if it's too short (prefer expanding forward)
     duration = end_time - start_time
     if duration < min_dur:
-        # Expand FORWARD to reach min_dur to preserve the immediate Hook-First start.
-        # Only expand backward slightly (max 0.5s) to soften the cut cut if possible.
-        diff = min_dur - duration
-        start_padding = min(0.5, start_time)
-        start_time = start_time - start_padding
-        end_time = end_time + (diff + start_padding)
-    elif duration > max_dur:
-        # Truncate to max_dur around peak
-        start_time = max(start_time, event.timestamp - (max_dur * 0.4))
+        end_time = start_time + min_dur
+
+    if duration > max_dur:
+        # Emergency truncation
         end_time = start_time + max_dur
 
     return HighlightCandidate(
@@ -86,15 +91,13 @@ def expand(event: DetectedEvent, timeline: List[TimelineSecond], profile: GamePr
         anchor_event=event,
         score=event.score,
         category="game_highlight",
-        reason=f"Detected {event.event_type} event",
+        reason=f"Action at {event.timestamp}s with Cause/Result arc.",
         game_id=profile.game_id,
         events=[event],
         profile_id=profile.game_id,
         profile_version=profile.version,
         evidence=event.evidence
     )
-
-
 
 def merge_overlapping(candidates: List[HighlightCandidate], rules: Dict) -> List[HighlightCandidate]:
     """
@@ -104,23 +107,18 @@ def merge_overlapping(candidates: List[HighlightCandidate], rules: Dict) -> List
     if not candidates:
         return []
     
-    # Sort by start time chronological order
     sorted_cands = sorted(candidates, key=lambda c: c.start)
     merged = [sorted_cands[0]]
-    merge_threshold = rules.get("merge_threshold", 8.0)
+    merge_threshold = rules.get("merge_threshold", 5.0) # Tighter merge threshold for human-editing
     
     for current in sorted_cands[1:]:
         last = merged[-1]
         
-        # If the gap between the end of the last clip and the start of this one is less than the threshold
-        # (or they overlap), merge them.
         gap = current.start - last.end
         if gap <= merge_threshold:
-            # Combine them
             new_end = max(last.end, current.end)
             new_score = max(last.score, current.score)
             
-            # Create a combined event list safely
             combined_events = []
             if hasattr(last, "events") and last.events:
                 combined_events.extend(last.events)
@@ -135,3 +133,4 @@ def merge_overlapping(candidates: List[HighlightCandidate], rules: Dict) -> List
             merged.append(current)
             
     return merged
+

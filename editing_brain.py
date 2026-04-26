@@ -55,33 +55,76 @@ def find_nearest_word_boundary(timestamp: float, transcript_data: List[Dict], se
             
     return best_boundary
 
-def apply_hook_tease(arc: Dict, tease_duration=3.0) -> Dict:
+def validate_clip_logic(arc: Dict, transcript_data: List[Dict]) -> bool:
     """
-    Implements 'Hook Placement' by anchoring back to the true multimodal peak_time.
+    Validates if a clip passes the Human-Editor criteria.
+    Criteria:
+    1. Hook length: Is the setup too long before the action?
+    2. Understandable without sound: Does the peak have high visual motion/action if speech is low?
+    3. Has Payoff: Does it naturally resolve? (We check duration after peak).
     """
-    # Use the peak_time passed from the moment_expander!
-    peak_time = arc.get("peak_time", arc["start"] + 2.0)
+    start_time = arc["start"]
+    peak_time = arc.get("peak_time", start_time + 2.0)
+    end_time = arc["end"]
     
-    # Position the teaser to start slightly before the peak payload hits
-    arc["hook_time"] = max(arc["start"], peak_time - 1.0)
+    # Rule 1: Hook must appear quickly. Setup should not exceed 4 seconds.
+    # Note: moment_expander already tries to keep it short, but this is the final gate.
+    if (peak_time - start_time) > 4.5:
+        # We will attempt to trim it in the calling function, but for now it's invalid
+        return False
+        
+    # Rule 2: Understandable without sound. 
+    # If it's just someone talking quietly with no visual action, it's a bad gaming short.
+    # We check the arc's metadata or score. Since we only have the dict here, 
+    # we assume clips with score < 60 that don't have a strong visual component are risky.
+    score = arc.get("score", 0)
+    reason = arc.get("reason", "").lower()
     
+    is_visual_event = any(k in reason for k in ["kill", "visual", "motion", "action", "combat"])
+    
+    if score < 65 and not is_visual_event:
+        # If it's a low score and not inherently visual, it might be boring without sound.
+        return False
+        
+    # Rule 3: Payoff length. Must have at least 1-2 seconds after the action peak.
+    if (end_time - peak_time) < 1.0:
+        return False
+        
+    return True
+
+def fix_clip_hook(arc: Dict, transcript_data: List[Dict]) -> Dict:
+    """
+    Aggressively trims the start of the clip so the hook appears within 2 seconds of the video starting.
+    """
+    start_time = arc["start"]
+    peak_time = arc.get("peak_time", start_time + 2.0)
+    
+    if (peak_time - start_time) > 2.0:
+        # Trim it down to a micro-setup (1.5s before peak)
+        new_start = peak_time - 1.5
+        arc["start"] = find_nearest_word_boundary(new_start, transcript_data, search_window=1.0)
+        
     return arc
 
 def refine_clips_for_social(arcs: List[Dict], transcript_data: List[Dict]) -> List[Dict]:
     """
-    Polishes the narrative arcs into final clipping instructions without destroying context bounds.
+    Polishes the narrative arcs into final clipping instructions using Human Editor logic.
+    Rejects or fixes clips that don't pass the narrative rules.
     """
     refined = []
     for arc in arcs:
         # 1. Natural timing adjustment (snap to sentence boundaries / pauses)
-        arc["start"] = find_nearest_word_boundary(arc["start"], transcript_data)
-        arc["end"] = find_nearest_word_boundary(arc["end"], transcript_data)
+        arc["start"] = find_nearest_word_boundary(arc["start"], transcript_data, search_window=1.5)
+        arc["end"] = find_nearest_word_boundary(arc["end"], transcript_data, search_window=2.0)
         
-        # (Removed: hardcoded 15-second expansion bug. The logic in moment_expander.py already 
-        # respects game-specific profile durations dynamically, we don't want to break it here).
+        # 2. Fix long hooks (trim fat before the action)
+        arc = fix_clip_hook(arc, transcript_data)
+        
+        # 3. Validate
+        if validate_clip_logic(arc, transcript_data):
+            refined.append(arc)
+        else:
+            # Clip was rejected by Human Editor logic (e.g. boring, too long setup, no payoff)
+            continue
             
-        # 2. Add 'Hook' context anchored to the peak event
-        arc = apply_hook_tease(arc)
-        
-        refined.append(arc)
     return refined
