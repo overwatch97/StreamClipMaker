@@ -1,0 +1,22 @@
+# Environments
+venv/
+__pycache__/
+.env
+.pytest_cache/
+
+# StreamClipMaker specific
+cache/
+models/
+*.pt
+
+# Local state
+streamclip_prefs.json
+streamclip_queue.json
+
+# IDE
+.vscode/
+.idea/
+
+# OS generated files
+.DS_Store
+Thumbs.db

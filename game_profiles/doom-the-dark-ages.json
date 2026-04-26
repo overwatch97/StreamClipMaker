@@ -1,0 +1,39 @@
+{
+  "game_id": "doom-the-dark-ages",
+  "game_name": "DOOM: The Dark Ages",
+  "genre": "action-fps",
+  "priority_events": [
+    "glory_kill",
+    "boss_fight",
+    "heavy_metal_drop"
+  ],
+  "ignore_states": [
+    "loading",
+    "cutscene_static"
+  ],
+  "context_rules": {
+    "expansion_buffer_start": 3.0,
+    "expansion_buffer_end": 7.0,
+    "min_clip_duration": 10.0,
+    "max_clip_duration": 40.0
+  },
+  "score_weights": {
+    "speech": 0.10,
+    "audio": 0.45,
+    "visual": 0.35,
+    "emotion": 0.10
+  },
+  "event_rules": [
+    {
+      "event": "chainsaw",
+      "visual_prompt": "chainsaw cutting through enemies",
+      "audio_tag": "Chainsaw revving",
+      "min_score": 0.7
+    },
+    {
+      "event": "gore_explosion",
+      "visual_prompt": "red explosions and blood splatter",
+      "min_score": 0.6
+    }
+  ]
+}

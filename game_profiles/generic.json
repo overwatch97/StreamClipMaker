@@ -1,0 +1,44 @@
+{
+  "game_id": "generic",
+  "game_name": "Generic Game",
+  "genre": "general",
+  "priority_events": [
+    "spike",
+    "high_energy",
+    "reaction"
+  ],
+  "ignore_states": [
+    "loading_screen",
+    "menu",
+    "lobby"
+  ],
+  "context_rules": {
+    "expansion_buffer_start": 6.0,
+    "expansion_buffer_end": 8.0,
+    "min_clip_duration": 15.0,
+    "max_clip_duration": 45.0,
+    "merge_threshold": 10.0
+  },
+  "score_weights": {
+    "speech": 0.25,
+    "audio": 0.25,
+    "visual": 0.25,
+    "emotion": 0.25
+  },
+  "spatial_rules": {
+    "dead_zones": [
+      { "name": "center_crosshair", "x_center": 0.5, "y_center": 0.5, "radius": 0.15 }
+    ],
+    "safe_zones": [
+      { "name": "top_center", "x": 0.5, "y": 0.1 }
+    ]
+  },
+  "event_rules": [
+    {
+      "event": "highlight",
+      "visual_prompt": "exciting gaming moment",
+      "audio_tag": "Excitement",
+      "min_score": 0.5
+    }
+  ]
+}

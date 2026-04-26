@@ -1,0 +1,39 @@
+{
+  "game_id": "red-dead-redemption-2",
+  "game_name": "Red Dead Redemption 2",
+  "genre": "open-world-adventure",
+  "priority_events": [
+    "cinematic_moment",
+    "emotional_dialogue",
+    "high_noon_duel"
+  ],
+  "ignore_states": [
+    "horse_travel_long",
+    "fishing_idle",
+    "sleeping"
+  ],
+  "context_rules": {
+    "expansion_buffer_start": 8.0,
+    "expansion_buffer_end": 12.0,
+    "min_clip_duration": 15.0,
+    "max_clip_duration": 60.0
+  },
+  "score_weights": {
+    "speech": 0.40,
+    "audio": 0.10,
+    "visual": 0.20,
+    "emotion": 0.30
+  },
+  "event_rules": [
+    {
+      "event": "facial_closeup",
+      "visual_prompt": "close up of a character's face with dramatic lighting",
+      "min_score": 0.5
+    },
+    {
+      "event": "gunfight",
+      "audio_tag": "Slow motion gunshots",
+      "min_score": 0.6
+    }
+  ]
+}
