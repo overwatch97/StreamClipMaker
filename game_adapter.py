@@ -21,7 +21,7 @@ import os
 import re
 from typing import Dict, List, Optional
 
-from phase3_types import ArcRegion, ArcShape, GameProfile
+from phase3_types import EventMoment, ArcShape, GameProfile
 
 logger = logging.getLogger(__name__)
 
@@ -95,9 +95,9 @@ class GameAdapter:
     # Arc Enrichment (the main public API)
     # ─────────────────────────────────────────────────────────────────────────
 
-    def enrich_arcs(self, arcs: List[ArcRegion]) -> List[ArcRegion]:
+    def enrich_arcs(self, arcs: List[EventMoment]) -> List[EventMoment]:
         """
-        Adds label and CLIP prompt to each ArcRegion.
+        Adds label and CLIP prompt to each EventMoment.
         Does NOT modify scores or filter arcs.
         """
         for arc in arcs:
@@ -105,7 +105,7 @@ class GameAdapter:
             arc.clip_prompt = self._build_clip_prompt(arc)
         return arcs
 
-    def enrich_arc(self, arc: ArcRegion) -> ArcRegion:
+    def enrich_arc(self, arc: EventMoment) -> EventMoment:
         """Single-arc version of enrich_arcs."""
         arc.label      = self._label_arc(arc)
         arc.clip_prompt = self._build_clip_prompt(arc)
@@ -115,13 +115,13 @@ class GameAdapter:
     # Label Generation
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _label_arc(self, arc: ArcRegion) -> str:
+    def _label_arc(self, arc: EventMoment) -> str:
         """
         Generates a human-readable label for the arc.
         Uses game-profile label overrides when available, otherwise uses
         the transcript to produce a richer description.
         """
-        shape_key = arc.shape_type.value
+        shape_key = arc.event_type
 
         # Profile may define custom labels per shape
         profile_labels = self.profile_data.get("arc_labels", {})
@@ -140,7 +140,7 @@ class GameAdapter:
     # CLIP Prompt Generation
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _build_clip_prompt(self, arc: ArcRegion) -> str:
+    def _build_clip_prompt(self, arc: EventMoment) -> str:
         """
         Builds a CLIP-compatible visual description of the arc.
 
@@ -149,7 +149,7 @@ class GameAdapter:
           2. Default template filled with transcript nouns
           3. Bare default if no transcript
         """
-        shape_key = arc.shape_type.value
+        shape_key = arc.event_type
 
         # 1. Profile-specific templates
         profile_templates = self.profile_data.get("clip_prompt_templates", {})

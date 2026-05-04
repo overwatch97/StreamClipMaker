@@ -59,7 +59,7 @@ def analyze_multimodal_highlights(
     from PIL import Image
     from phase3_types import TimelineSecond, ArcShape
     from profile_resolver import ProfileResolver
-    from arc_detector import ArcDetector
+    from event_fusion_engine import EventFusionEngine
     from game_adapter import GameAdapter
     from narrative_engine import NarrativeEngine
     import moment_expander
@@ -113,21 +113,20 @@ def analyze_multimodal_highlights(
         sec.fused_score = res.scores.total
         timeline.append(sec)
 
-    # ── 3. Arc Detection (the new intelligence layer) ─────────────────────────
-    print("Running Phase 3: Dynamic Arc Shape Detection...", flush=True)
+    # ── 3. Event Fusion Engine ────────────────────────────────────────────────
+    print("Running Phase 3: Event Fusion Engine...", flush=True)
 
-    arc_detector = ArcDetector()
-    arcs = arc_detector.detect(
+    fusion_engine = EventFusionEngine()
+    arcs = fusion_engine.detect(
         timeline=timeline,
-        profile=profile,
         transcript_data=transcript_data,
     )
-    print(f"  → {len(arcs)} arc regions detected.", flush=True)
+    print(f"  → {len(arcs)} event moments detected.", flush=True)
     for arc in arcs:
         print(
-            f"     [{arc.shape_type.value.upper():10s}] "
+            f"     [{arc.event_type.upper():10s}] "
             f"{arc.start:.1f}s – {arc.end:.1f}s  "
-            f"quality={arc.quality_score:.2f}",
+            f"quality={arc.final_score:.2f}",
             flush=True,
         )
 
@@ -174,7 +173,7 @@ def analyze_multimodal_highlights(
         continuity = editing_brain.get_avg_score(
             timeline, arc.peak_time - 1.5, arc.peak_time + 1.5
         )
-        if continuity < 0.12 and arc.quality_score > 0.80:
+        if continuity < 0.12 and arc.final_score > 0.80:
             print(
                 f"  Rejected isolated glitch at t={arc.peak_time:.1f}s "
                 f"(continuity={continuity:.3f})",
@@ -182,7 +181,7 @@ def analyze_multimodal_highlights(
             )
             continue
 
-        candidate.rank_score = arc.quality_score
+        candidate.rank_score = arc.final_score
         candidates.append(candidate)
         seen_times.append(arc.peak_time)
 
@@ -222,11 +221,10 @@ def analyze_multimodal_highlights(
         "highlights_selected": len(highlights),
         "arc_summary": [
             {
-                "shape":   a.shape_type.value,
+                "shape":   a.event_type,
                 "start":   round(a.start, 1),
                 "end":     round(a.end, 1),
-                "quality": round(a.quality_score, 3),
-                "label":   a.label,
+                "quality": round(a.final_score, 3),
             }
             for a in arcs
         ],
@@ -275,9 +273,7 @@ def _run_clip_visual_pass(arcs, frame_samples, device: str):
                 with __import__("torch").no_grad():
                     out = model(**inputs)
                 clip_score = float(out.logits_per_image.softmax(dim=1).cpu()[0][0])
-                # Store as evidence — no filtering based on this
-                arc.clip_prompt = arc.clip_prompt  # unchanged
-                logger.debug(f"CLIP score for [{arc.shape_type.value}] at {arc.start:.1f}s: {clip_score:.3f}")
+                logger.debug(f"CLIP score for [{arc.event_type}] at {arc.start:.1f}s: {clip_score:.3f}")
             except Exception:
                 pass
 

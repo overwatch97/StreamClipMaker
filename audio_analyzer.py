@@ -124,6 +124,7 @@ def score_audio_windows(audio_bundle, windows):
                     "rms_spike": rms_spike,
                     "sound_change": sound_change,
                     "pitch_variation": pitch_variation,
+                    "audio_peak_norm": rms_spike, # Added for Event Fusion Engine
                 },
             }
         )

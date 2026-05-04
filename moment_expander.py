@@ -19,7 +19,7 @@ from typing import List, Dict, Optional
 import numpy as np
 
 from phase3_types import (
-    ArcRegion, ArcShape, ARC_DURATION_RULES,
+    EventMoment, ARC_DURATION_RULES,
     GameProfile, TimelineSecond, DetectedEvent, HighlightCandidate,
 )
 import editing_brain
@@ -32,23 +32,24 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def expand_arc(
-    arc: ArcRegion,
+    arc: EventMoment,
     timeline: List[TimelineSecond],
     profile: Optional[GameProfile],
     transcript_data: List[Dict],
     stream_duration: float = 0.0,
 ) -> HighlightCandidate:
     """
-    Converts an ArcRegion into a HighlightCandidate with shape-aware boundaries.
+    Converts an EventMoment into a HighlightCandidate with shape-aware boundaries.
     """
-    shape   = arc.shape_type
-    min_dur, max_dur = ARC_DURATION_RULES.get(shape.value, (5, 60))
+    shape   = arc.event_type
+    min_dur, max_dur = ARC_DURATION_RULES.get(shape, (5, 60))
 
     # Shape-specific boundary strategy
-    if shape == ArcShape.SPIKE:
+    # Shape-specific boundary strategy
+    if shape == "combat":
         start, end = _expand_spike(arc, timeline, stream_duration)
 
-    elif shape == ArcShape.TENSION:
+    elif shape == "travel":
         # The entire arc is the clip — setup and resolution both matter
         start, end = arc.start, arc.end
         # Safety cap at max_dur, keeping the peak centered
@@ -57,24 +58,18 @@ def expand_arc(
             start = max(0.0, arc.peak_time - half * 0.45)
             end   = min(stream_duration or arc.end, arc.peak_time + half * 0.55)
 
-    elif shape == ArcShape.COMEDY:
+    elif shape == "reaction":
         # 3s of setup before onset + punchline plays out fully
         start = max(0.0, arc.start - 3.0)
         end   = min(stream_duration or arc.end, arc.peak_time + 6.0)
 
-    elif shape == ArcShape.DRAMA:
+    elif shape == "neutral":
         # Dialogue must be complete — use full arc
         start, end = arc.start, arc.end
         if (end - start) > max_dur:
             end = start + max_dur
 
-    elif shape == ArcShape.TRIUMPH:
-        # Show the last phase of struggle + the win
-        start = max(0.0, arc.end - min(40.0, arc.duration * 0.65))
-        end   = min(stream_duration or arc.end, arc.peak_time + 6.0)
-        end   = max(end, arc.end)  # Always include the arc end (the payoff)
-
-    elif shape == ArcShape.DISCOVERY:
+    elif shape == "surprise":
         # Brief setup → the reveal
         start = max(0.0, arc.start - 2.0)
         end   = min(stream_duration or arc.end, arc.start + min(arc.duration + 8.0, max_dur))
@@ -96,16 +91,16 @@ def expand_arc(
         end   = min(stream_duration, end)
 
     # Build a synthetic DetectedEvent for the HighlightCandidate anchor
+    features = getattr(arc, "features", {})
     anchor = DetectedEvent(
-        event_type=shape.value,
+        event_type=shape,
         timestamp=arc.peak_time,
-        score=arc.quality_score,
+        score=arc.final_score,
         evidence={
-            "peak_audio":   arc.peak_audio,
-            "peak_motion":  arc.peak_motion,
-            "peak_emotion": arc.peak_emotion,
-            "peak_speech":  arc.peak_speech,
-            "end_composite": arc.end_composite,
+            "peak_audio":   features.get("audio_peak", 0.0),
+            "peak_motion":  features.get("motion_delta", 0.0),
+            "peak_emotion": features.get("emotion_score", 0.0),
+            "peak_speech":  features.get("speech_energy", 0.0),
         },
     )
 
@@ -117,16 +112,16 @@ def expand_arc(
         start=round(float(start), 3),
         end=round(float(end), 3),
         anchor_event=anchor,
-        score=arc.quality_score,
-        category=arc.label or shape.value,
-        reason=arc.label or f"{shape.value} arc at {arc.start:.1f}s",
+        score=arc.final_score,
+        category=arc.label or shape,
+        reason=arc.label or f"{shape} event at {arc.start:.1f}s",
         game_id=game_id,
         events=[anchor],
         profile_id=profile_id,
         profile_version=profile_version,
         evidence=anchor.evidence,
         text=arc.transcript,
-        rank_score=arc.quality_score,
+        rank_score=arc.final_score,
     )
 
     # Bake hook/title into clipper JSON via text field
@@ -141,7 +136,7 @@ def expand_arc(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _expand_spike(
-    arc: ArcRegion,
+    arc: EventMoment,
     timeline: List[TimelineSecond],
     stream_duration: float,
 ) -> tuple:
@@ -177,16 +172,20 @@ def expand(
 ) -> HighlightCandidate:
     """
     Legacy expander for DetectedEvent objects.
-    Wraps the event as a synthetic SPIKE arc and delegates to expand_arc.
+    Wraps the event as a synthetic EventMoment and delegates to expand_arc.
     """
-    # Build a minimal ArcRegion from the DetectedEvent
-    arc = ArcRegion(
-        shape_type=ArcShape.SPIKE,
+    arc = EventMoment(
+        event_type="combat",
         start=max(0.0, event.timestamp - 5.0),
         end=event.timestamp + 8.0,
         peak_time=event.timestamp,
-        quality_score=event.score,
-        composite_values=[event.score],
+        duration=13.0,
+        final_score=event.score,
+        surprise_score=0.0,
+        conflict_score=0.0,
+        payoff_score=0.0,
+        priority=1,
+        scene_type="combat",
         transcript="",
         label=event.event_type,
     )

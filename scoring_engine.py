@@ -60,6 +60,10 @@ class SegmentResult:
             "start_time": round(float(self.window.start_time), 4),
             "end_time": round(float(self.window.end_time), 4),
             "scores": self.scores.as_dict(),
+            "speech_features": self.speech_features,
+            "audio_features": self.audio_features,
+            "visual_features": self.visual_features,
+            "emotion_features": self.emotion_features,
         }
 
 

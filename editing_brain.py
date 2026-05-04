@@ -16,7 +16,7 @@ KEY CHANGE from previous version:
 import logging
 from typing import List, Dict, Optional
 
-from phase3_types import ARC_DURATION_RULES, ArcShape
+from phase3_types import ARC_DURATION_RULES
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +135,7 @@ def validate_clip_logic(
     start_time = arc.get("start", 0.0)
     end_time   = arc.get("end", 0.0)
     duration   = end_time - start_time
-    shape_type = arc.get("shape_type", ArcShape.SPIKE.value)
+    shape_type = arc.get("shape_type", "combat")
     peak_time  = arc.get("peak_time", start_time + 2.0)
 
     # ── 1. Duration check (shape-aware) ─────────────────────────────────────
@@ -170,7 +170,7 @@ def validate_clip_logic(
     # ── 4. Tension arc resolution check ─────────────────────────────────────
     # A TENSION arc that is still at peak signal at the end hasn't resolved yet.
     # Don't clip it — the story isn't finished.
-    if shape_type == ArcShape.TENSION.value:
+    if shape_type == "travel":
         evidence    = arc.get("evidence", {})
         end_comp    = evidence.get("end_composite", None)
         peak_audio  = evidence.get("peak_audio", 0.5)
@@ -180,7 +180,7 @@ def validate_clip_logic(
             resolution_ratio = end_comp / (peak_sig + 0.01)
             if resolution_ratio > 0.85:
                 logger.debug(
-                    f"  Rejected [tension] at {start_time:.1f}s — "
+                    f"  Rejected [travel] at {start_time:.1f}s — "
                     f"no resolution (end_comp={end_comp:.3f} / peak={peak_sig:.3f})"
                 )
                 return False
@@ -188,10 +188,10 @@ def validate_clip_logic(
     # ── 5. Payoff strength check ─────────────────────────────────────────────
     # Tension arcs don't need a speech/emotion payoff — their payoff is the resolution drop,
     # which we already checked above.
-    if timeline and shape_type != ArcShape.TENSION.value:
+    if timeline and shape_type != "travel":
         payoff = get_payoff_score(timeline, start_time, end_time)
         payoff_threshold = 0.20 if shape_type in (
-            ArcShape.DRAMA.value, ArcShape.DISCOVERY.value
+            "neutral", "surprise"
         ) else 0.30
         if payoff < payoff_threshold:
             logger.debug(
@@ -213,10 +213,10 @@ def fix_clip_hook(arc: Dict, transcript_data: List[Dict]) -> Dict:
     Trims the start of SPIKE arcs so the action lands within the first 2.5s.
     TENSION / DRAMA / TRIUMPH arcs are left untouched — their setup IS the value.
     """
-    shape_type = arc.get("shape_type", ArcShape.SPIKE.value)
+    shape_type = arc.get("shape_type", "combat")
 
     # Only aggressively trim spike arcs — other shapes need their build-up
-    if shape_type not in (ArcShape.SPIKE.value, ArcShape.COMEDY.value):
+    if shape_type not in ("combat", "reaction"):
         return arc
 
     start_time = arc["start"]
@@ -252,12 +252,12 @@ def refine_clips_for_social(
     """
     refined = []
     for arc in arcs:
-        shape_type = arc.get("shape_type", ArcShape.SPIKE.value)
+        shape_type = arc.get("shape_type", "combat")
 
         # 1. Natural boundary snapping
         #    Tension/Drama/Triumph: wider snap window to preserve setup/payoff
         snap_window = 3.0 if shape_type in (
-            ArcShape.TENSION.value, ArcShape.DRAMA.value, ArcShape.TRIUMPH.value
+            "travel", "neutral", "combat"
         ) else 1.5
 
         arc["start"] = find_nearest_word_boundary(

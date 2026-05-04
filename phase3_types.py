@@ -19,25 +19,71 @@ class ArcShape(Enum):
     TRIUMPH   = "triumph"    # Oscillating struggle → sustained high at end — boss kill, clutch win
     DISCOVERY = "discovery"  # All signals shift character simultaneously — new area, plot reveal
 
+EVENT_PRIORITIES = {
+    "surprise": 10,
+    "reaction": 9,
+    "combat": 7,
+    "travel": 3,
+    "neutral": 1
+}
+
+@dataclass
+class EventMoment:
+    event_type: str
+    start: float
+    end: float
+    peak_time: float
+    duration: float
+    final_score: float
+    surprise_score: float
+    conflict_score: float
+    payoff_score: float
+    priority: int
+    scene_type: str
+    features: Dict[str, Any] = field(default_factory=dict)
+    transcript: str = ""
+    hook_sentence: str = ""
+    short_title: str = ""
+    label: str = ""
+    clip_prompt: str = ""
+
+    def to_clipper_json(self) -> Dict:
+        return {
+            "start": round(self.start, 3),
+            "end": round(self.end, 3),
+            "peak_time": round(self.peak_time, 3),
+            "category": self.event_type.capitalize(),
+            "score": int(self.final_score * 100),
+            "rank_score": round(self.final_score, 4),
+            "reason": f"{self.event_type.capitalize()} Moment",
+            "text": self.transcript,
+            "hook": self.hook_sentence,
+            "title": self.short_title,
+            "events": [self.event_type],
+            "evidence": {
+                "surprise_score": round(self.surprise_score, 3),
+                "conflict_score": round(self.conflict_score, 3),
+                "payoff_score": round(self.payoff_score, 3),
+            }
+        }
+
 
 # Clip duration rules per arc shape (min_secs, max_secs)
 ARC_DURATION_RULES: Dict[str, tuple] = {
-    ArcShape.SPIKE.value:     (5,  35),
-    ArcShape.TENSION.value:   (20, 90),
-    ArcShape.COMEDY.value:    (6,  30),
-    ArcShape.DRAMA.value:     (10, 75),
-    ArcShape.TRIUMPH.value:   (15, 75),
-    ArcShape.DISCOVERY.value: (8,  45),
+    "combat":     (5,  35),
+    "travel":     (20, 90),
+    "reaction":   (6,  30),
+    "neutral":    (10, 75),
+    "surprise":   (8,  45),
 }
 
 # Human-readable labels for GUI display
 ARC_SHAPE_LABELS: Dict[str, str] = {
-    ArcShape.SPIKE.value:     "Action Moment",
-    ArcShape.TENSION.value:   "Suspense Arc",
-    ArcShape.COMEDY.value:    "Comedy Beat",
-    ArcShape.DRAMA.value:     "Dramatic Scene",
-    ArcShape.TRIUMPH.value:   "Triumph Moment",
-    ArcShape.DISCOVERY.value: "Discovery Moment",
+    "combat":     "Action Moment",
+    "travel":     "Suspense Arc",
+    "reaction":   "Comedy Beat",
+    "neutral":    "Story Beat",
+    "surprise":   "Discovery Moment",
 }
 
 

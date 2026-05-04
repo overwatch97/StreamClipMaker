@@ -17,7 +17,7 @@ import subprocess
 import time
 from typing import List, Optional, Dict
 
-from phase3_types import ArcRegion, ArcShape, ArcShape
+from phase3_types import EventMoment
 
 logger = logging.getLogger(__name__)
 
@@ -28,45 +28,39 @@ logger = logging.getLogger(__name__)
 # The best template is chosen based on available transcript content.
 # ─────────────────────────────────────────────────────────────────────────────
 FALLBACK_HOOKS: Dict[str, List[str]] = {
-    ArcShape.SPIKE.value: [
+    "combat": [
         "This moment changed everything...",
         "Nobody saw this coming.",
         "Watch what happens next.",
     ],
-    ArcShape.TENSION.value: [
+    "travel": [
         "No horse. No gun. Just survival instinct.",
         "The longest few minutes of the stream.",
         "Can they escape? Watch to find out.",
     ],
-    ArcShape.COMEDY.value: [
+    "reaction": [
         "This was NOT supposed to happen 😂",
         "I genuinely could not believe this.",
         "The game had other plans...",
     ],
-    ArcShape.DRAMA.value: [
-        "This scene hit different.",
-        "The story gets real here.",
-        "You need to hear this.",
-    ],
-    ArcShape.TRIUMPH.value: [
-        "After all that — the comeback.",
-        "They said it couldn't be done.",
-        "The grind paid off.",
-    ],
-    ArcShape.DISCOVERY.value: [
+    "surprise": [
         "Wait... what is THAT?",
         "Nobody talks about this hidden detail.",
         "Found something the devs didn't want you to see.",
     ],
+    "neutral": [
+        "This scene hit different.",
+        "The story gets real here.",
+        "You need to hear this.",
+    ],
 }
 
 FALLBACK_TITLES: Dict[str, str] = {
-    ArcShape.SPIKE.value:     "Insane Action Moment",
-    ArcShape.TENSION.value:   "Tense Chase No One Expected",
-    ArcShape.COMEDY.value:    "Funniest Thing That Happened",
-    ArcShape.DRAMA.value:     "Emotional Story Beat",
-    ArcShape.TRIUMPH.value:   "The Comeback That Shocked Everyone",
-    ArcShape.DISCOVERY.value: "Hidden Secret Discovered",
+    "combat":   "Insane Action Moment",
+    "travel":   "Tense Chase No One Expected",
+    "reaction": "Funniest Thing That Happened",
+    "neutral":  "Emotional Story Beat",
+    "surprise": "Hidden Secret Discovered",
 }
 
 
@@ -129,7 +123,7 @@ class NarrativeEngine:
     # Public API
     # ─────────────────────────────────────────────────────────────────────────
 
-    def enrich_arcs(self, arcs: List[ArcRegion], game_name: str = "") -> List[ArcRegion]:
+    def enrich_arcs(self, arcs: List[EventMoment], game_name: str = "") -> List[EventMoment]:
         """
         Adds hook_sentence and short_title to each ArcRegion.
         Returns the same list, mutated in place.
@@ -142,7 +136,7 @@ class NarrativeEngine:
     # Single Arc Enrichment
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _enrich_single(self, arc: ArcRegion, game_name: str = "") -> ArcRegion:
+    def _enrich_single(self, arc: EventMoment, game_name: str = "") -> EventMoment:
         if self.available and arc.transcript.strip():
             try:
                 result = self._query_ollama_for_arc(arc, game_name)
@@ -162,7 +156,7 @@ class NarrativeEngine:
     # LLM Query
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _query_ollama_for_arc(self, arc: ArcRegion, game_name: str) -> Optional[Dict]:
+    def _query_ollama_for_arc(self, arc: EventMoment, game_name: str) -> Optional[Dict]:
         """
         Queries Ollama with a structured prompt that describes the arc shape
         and transcript, and asks for a hook + title in JSON format.
@@ -170,15 +164,14 @@ class NarrativeEngine:
         import requests
 
         shape_descriptions = {
-            ArcShape.SPIKE.value:     "a sudden intense action spike (kill, explosion, or dramatic event)",
-            ArcShape.TENSION.value:   "a sustained tension arc — rising danger, chase, evasion, or stealth sequence",
-            ArcShape.COMEDY.value:    "a comedy beat — an unexpected, funny, or absurd moment",
-            ArcShape.DRAMA.value:     "a dramatic scene — emotional dialogue, story revelation, or character moment",
-            ArcShape.TRIUMPH.value:   "a triumph moment — overcoming a difficult challenge after struggle",
-            ArcShape.DISCOVERY.value: "a discovery moment — finding something surprising, hidden, or new",
+            "combat":   "a sudden intense action spike (kill, explosion, or dramatic event)",
+            "travel":   "a sustained tension arc — rising danger, chase, evasion, or stealth sequence",
+            "reaction": "a comedy beat or strong reaction — an unexpected, funny, or absurd moment",
+            "neutral":  "a dramatic scene — emotional dialogue, story revelation, or character moment",
+            "surprise": "a discovery moment — finding something surprising, hidden, or new",
         }
 
-        shape_desc = shape_descriptions.get(arc.shape_type.value, "a compelling gaming moment")
+        shape_desc = shape_descriptions.get(arc.event_type, "a compelling gaming moment")
         game_context = f"Game: {game_name}. " if game_name else ""
         transcript_snippet = arc.transcript[:300].strip() if arc.transcript else "(no dialogue)"
 
@@ -224,12 +217,12 @@ class NarrativeEngine:
     # Fallback template hooks
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _fallback_hook(self, arc: ArcRegion) -> str:
+    def _fallback_hook(self, arc: EventMoment) -> str:
         """
         Picks the best fallback hook for this arc.
         If there's useful transcript content, tries to incorporate it.
         """
-        shape_key = arc.shape_type.value
+        shape_key = arc.event_type
         templates = FALLBACK_HOOKS.get(shape_key, ["Watch this moment."])
 
         # If transcript has content, try to make the hook slightly more specific
@@ -246,9 +239,9 @@ class NarrativeEngine:
         idx = int(arc.start / 60) % len(templates)
         return templates[idx]
 
-    def _fallback_title(self, arc: ArcRegion) -> str:
+    def _fallback_title(self, arc: EventMoment) -> str:
         """Shape-aware fallback title."""
-        shape_key = arc.shape_type.value
+        shape_key = arc.event_type
         base_title = FALLBACK_TITLES.get(shape_key, "Epic Gaming Moment")
 
         # Add approximate timestamp for context
