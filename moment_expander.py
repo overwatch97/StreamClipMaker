@@ -1,136 +1,222 @@
+"""
+moment_expander.py — Arc-Aware Clip Boundary Expansion
+========================================================
+Converts an ArcRegion (from arc_detector.py) or a legacy DetectedEvent
+into a HighlightCandidate with precise clip boundaries.
+
+Shape-aware expansion:
+  SPIKE     — peak ± tight buffer (5s pre, 8s post)
+  TENSION   — use full arc start→end (the whole arc IS the story)
+  COMEDY    — 3s setup before spike onset + 6s post-peak
+  DRAMA     — full arc, snapped to sentence boundaries
+  TRIUMPH   — 10s before arc end (show the struggle) + 6s post-peak
+  DISCOVERY — 2s before arc + 12s after onset
+"""
+
+import logging
+from typing import List, Dict, Optional
+
 import numpy as np
-from typing import List, Dict, Optional, Tuple
-from phase3_types import GameProfile, TimelineSecond, DetectedEvent, HighlightCandidate
+
+from phase3_types import (
+    ArcRegion, ArcShape, ARC_DURATION_RULES,
+    GameProfile, TimelineSecond, DetectedEvent, HighlightCandidate,
+)
 import editing_brain
 
-def expand(event: DetectedEvent, timeline: List[TimelineSecond], profile: GameProfile, 
-           transcript_data: List[Dict]) -> HighlightCandidate:
+logger = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Arc-Region Expansion (primary path)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def expand_arc(
+    arc: ArcRegion,
+    timeline: List[TimelineSecond],
+    profile: Optional[GameProfile],
+    transcript_data: List[Dict],
+    stream_duration: float = 0.0,
+) -> HighlightCandidate:
     """
-    Expands a clip boundary from a detected event peak using human-editor logic:
-    CAUSE (Hook) -> ACTION (Main Event) -> RESULT (Payoff/Reaction).
+    Converts an ArcRegion into a HighlightCandidate with shape-aware boundaries.
     """
-    rules = profile.context_rules
-    max_cause_lookback = 5.0 # Max seconds to look back for a hook
-    max_result_lookahead = 10.0 # Max seconds to look forward for a payoff
-    min_dur = rules.get("min_clip_duration", 5.0) # Social shorts can be very short
-    max_dur = rules.get("max_clip_duration", 60.0)
+    shape   = arc.shape_type
+    min_dur, max_dur = ARC_DURATION_RULES.get(shape.value, (5, 60))
 
-    timestamps = [s.timestamp for s in timeline]
-    try:
-        peak_idx = timestamps.index(event.timestamp)
-    except ValueError:
-        peak_idx = int(np.argmin([abs(t - event.timestamp) for t in timestamps]))
+    # Shape-specific boundary strategy
+    if shape == ArcShape.SPIKE:
+        start, end = _expand_spike(arc, timeline, stream_duration)
 
-    # --- 1. Find CAUSE (Hook / Setup) ---
-    # Look backwards for a spike in speech (someone starting to talk loudly) or visual motion.
-    start_idx = peak_idx
-    cause_found = False
-    while start_idx > 0:
-        current = timeline[start_idx - 1]
-        if current.is_ignore_state:
-            break
-        
-        elapsed = event.timestamp - current.timestamp
-        if elapsed > max_cause_lookback:
-            break
-            
-        # Hook criteria: A sudden speech spike or high overall score *before* the action hits.
-        if current.speech_score > 0.4 or current.fused_score > 0.5:
-            start_idx -= 1
-            cause_found = True
-        elif not cause_found and elapsed <= 1.0:
-            # Micro-setup: If we haven't found a strong cause, at least step back a tiny bit
-            start_idx -= 1
-        else:
-            break
+    elif shape == ArcShape.TENSION:
+        # The entire arc is the clip — setup and resolution both matter
+        start, end = arc.start, arc.end
+        # Safety cap at max_dur, keeping the peak centered
+        if (end - start) > max_dur:
+            half = max_dur / 2.0
+            start = max(0.0, arc.peak_time - half * 0.45)
+            end   = min(stream_duration or arc.end, arc.peak_time + half * 0.55)
 
-    # --- 2. Find RESULT (Payoff / Reaction) ---
-    # Look forwards for emotion spikes (laugh/scream) or speech resolving.
-    end_idx = peak_idx
-    result_found = False
-    while end_idx < len(timeline) - 1:
-        current = timeline[end_idx + 1]
-        if current.is_ignore_state:
-            break
-            
-        elapsed = current.timestamp - event.timestamp
-        if elapsed > max_result_lookahead:
-            break
-            
-        # Reaction criteria: High emotion score (facecam) or prolonged speech.
-        if current.emotion_score > 0.4 or current.speech_score > 0.3:
-            end_idx += 1
-            result_found = True
-        elif not result_found and elapsed <= 2.0:
-            # Let the action breathe a little before cutting if no immediate reaction
-            end_idx += 1
-        else:
-            break
+    elif shape == ArcShape.COMEDY:
+        # 3s of setup before onset + punchline plays out fully
+        start = max(0.0, arc.start - 3.0)
+        end   = min(stream_duration or arc.end, arc.peak_time + 6.0)
 
-    # Snap to transcript boundaries using semantic sentence boundaries
-    start_time = timeline[start_idx].timestamp
-    end_time = timeline[end_idx].timestamp
-    
-    # Precise snapping: Hook must snap cleanly to start of sentence. 
-    # Result must snap cleanly to end of sentence.
-    start_time = editing_brain.find_nearest_word_boundary(start_time, transcript_data, search_window=2.0)
-    end_time = editing_brain.find_nearest_word_boundary(end_time, transcript_data, search_window=3.0)
+    elif shape == ArcShape.DRAMA:
+        # Dialogue must be complete — use full arc
+        start, end = arc.start, arc.end
+        if (end - start) > max_dur:
+            end = start + max_dur
 
-    # Force minimum duration if it's too short (prefer expanding forward)
-    duration = end_time - start_time
-    if duration < min_dur:
-        end_time = start_time + min_dur
+    elif shape == ArcShape.TRIUMPH:
+        # Show the last phase of struggle + the win
+        start = max(0.0, arc.end - min(40.0, arc.duration * 0.65))
+        end   = min(stream_duration or arc.end, arc.peak_time + 6.0)
+        end   = max(end, arc.end)  # Always include the arc end (the payoff)
 
-    if duration > max_dur:
-        # Emergency truncation
-        end_time = start_time + max_dur
+    elif shape == ArcShape.DISCOVERY:
+        # Brief setup → the reveal
+        start = max(0.0, arc.start - 2.0)
+        end   = min(stream_duration or arc.end, arc.start + min(arc.duration + 8.0, max_dur))
 
-    return HighlightCandidate(
-        start=round(float(start_time), 3),
-        end=round(float(end_time), 3),
-        anchor_event=event,
-        score=event.score,
-        category="game_highlight",
-        reason=f"Action at {event.timestamp}s with Cause/Result arc.",
-        game_id=profile.game_id,
-        events=[event],
-        profile_id=profile.game_id,
-        profile_version=profile.version,
-        evidence=event.evidence
+    else:
+        start, end = arc.start, arc.end
+
+    # Minimum duration floor
+    if (end - start) < min_dur:
+        end = start + min_dur
+
+    # Snap to natural speech boundaries
+    start = editing_brain.find_nearest_word_boundary(start, transcript_data, search_window=2.0)
+    end   = editing_brain.find_nearest_word_boundary(end,   transcript_data, search_window=2.5)
+
+    # Clamp to stream
+    if stream_duration > 0:
+        start = max(0.0, min(start, stream_duration - min_dur))
+        end   = min(stream_duration, end)
+
+    # Build a synthetic DetectedEvent for the HighlightCandidate anchor
+    anchor = DetectedEvent(
+        event_type=shape.value,
+        timestamp=arc.peak_time,
+        score=arc.quality_score,
+        evidence={
+            "peak_audio":   arc.peak_audio,
+            "peak_motion":  arc.peak_motion,
+            "peak_emotion": arc.peak_emotion,
+            "peak_speech":  arc.peak_speech,
+            "end_composite": arc.end_composite,
+        },
     )
 
-def merge_overlapping(candidates: List[HighlightCandidate], rules: Dict) -> List[HighlightCandidate]:
+    profile_id      = profile.game_id      if profile else "generic"
+    profile_version = profile.version      if profile else "1.0.0"
+    game_id         = profile.game_id      if profile else "generic"
+
+    candidate = HighlightCandidate(
+        start=round(float(start), 3),
+        end=round(float(end), 3),
+        anchor_event=anchor,
+        score=arc.quality_score,
+        category=arc.label or shape.value,
+        reason=arc.label or f"{shape.value} arc at {arc.start:.1f}s",
+        game_id=game_id,
+        events=[anchor],
+        profile_id=profile_id,
+        profile_version=profile_version,
+        evidence=anchor.evidence,
+        text=arc.transcript,
+        rank_score=arc.quality_score,
+    )
+
+    # Bake hook/title into clipper JSON via text field
+    if arc.hook_sentence:
+        candidate.text = f"[Hook: {arc.hook_sentence}] {candidate.text}".strip()
+
+    return candidate
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SPIKE-specific expander
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _expand_spike(
+    arc: ArcRegion,
+    timeline: List[TimelineSecond],
+    stream_duration: float,
+) -> tuple:
+    """For SPIKE arcs: peak ± dynamically sized buffer based on surrounding signal."""
+    peak = arc.peak_time
+
+    # Look backward for a speech spike (setup / "watch this" moment)
+    start = max(0.0, peak - 5.0)
+    for sec in reversed([s for s in timeline if (peak - 6.0) <= s.timestamp < peak]):
+        if sec.speech_score > 0.40 or sec.fused_score > 0.50:
+            start = min(start, sec.timestamp - 0.5)
+            break
+
+    # Look forward for an emotion spike (the reaction)
+    end = min(stream_duration or (peak + 8.0), peak + 8.0)
+    for sec in [s for s in timeline if peak < s.timestamp <= (peak + 10.0)]:
+        if sec.emotion_score > 0.40 or sec.speech_score > 0.35:
+            end = max(end, sec.timestamp + 0.5)
+            break
+
+    return max(0.0, start), end
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Legacy DetectedEvent expansion (kept for any old call-sites)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def expand(
+    event: DetectedEvent,
+    timeline: List[TimelineSecond],
+    profile: GameProfile,
+    transcript_data: List[Dict],
+) -> HighlightCandidate:
     """
-    Merges candidates that overlap or are extremely close to each other,
-    creating continuous story arcs for multi-kills or prolonged events.
+    Legacy expander for DetectedEvent objects.
+    Wraps the event as a synthetic SPIKE arc and delegates to expand_arc.
+    """
+    # Build a minimal ArcRegion from the DetectedEvent
+    arc = ArcRegion(
+        shape_type=ArcShape.SPIKE,
+        start=max(0.0, event.timestamp - 5.0),
+        end=event.timestamp + 8.0,
+        peak_time=event.timestamp,
+        quality_score=event.score,
+        composite_values=[event.score],
+        transcript="",
+        label=event.event_type,
+    )
+    return expand_arc(arc, timeline, profile, transcript_data)
+
+
+def merge_overlapping(
+    candidates: List[HighlightCandidate],
+    rules: Dict,
+) -> List[HighlightCandidate]:
+    """
+    Merges adjacent highlight candidates that are within merge_threshold seconds.
     """
     if not candidates:
         return []
-    
+
     sorted_cands = sorted(candidates, key=lambda c: c.start)
     merged = [sorted_cands[0]]
-    merge_threshold = rules.get("merge_threshold", 5.0) # Tighter merge threshold for human-editing
-    
+    merge_threshold = rules.get("merge_threshold", 5.0)
+
     for current in sorted_cands[1:]:
         last = merged[-1]
-        
-        gap = current.start - last.end
+        gap  = current.start - last.end
         if gap <= merge_threshold:
-            new_end = max(last.end, current.end)
-            new_score = max(last.score, current.score)
-            
-            combined_events = []
+            last.end   = max(last.end, current.end)
+            last.score = max(last.score, current.score)
             if hasattr(last, "events") and last.events:
-                combined_events.extend(last.events)
-            if hasattr(current, "events") and current.events:
-                combined_events.extend(current.events)
-            
-            last.end = new_end
-            last.score = new_score
-            last.events = combined_events
-            last.reason = f"{last.reason} + merged subsequent event"
+                last.events.extend(current.events or [])
+            last.reason = f"{last.reason} + merged"
         else:
             merged.append(current)
-            
-    return merged
 
+    return merged

@@ -7,10 +7,10 @@
       "samples": 1
     },
     "gpu": {
-      "avg_seconds_per_input_minute": 3.792564005580801,
+      "avg_seconds_per_input_minute": 3.4996749213896274,
       "last_error": null,
-      "last_success": "2026-04-25T12:09:32.423367+00:00",
-      "samples": 35
+      "last_success": "2026-05-03T11:13:53.932909+00:00",
+      "samples": 43
     }
   },
   "encode": {
@@ -21,10 +21,10 @@
       "samples": 11
     },
     "gpu": {
-      "avg_seconds_per_input_minute": 38.92138095063016,
+      "avg_seconds_per_input_minute": 38.46163881963514,
       "last_error": null,
-      "last_success": "2026-04-25T12:48:24.530120+00:00",
-      "samples": 135
+      "last_success": "2026-05-03T11:59:11.180619+00:00",
+      "samples": 148
     }
   },
   "spotlight": {
@@ -49,10 +49,10 @@
       "samples": 1
     },
     "gpu": {
-      "avg_seconds_per_input_minute": 1.879338293659303,
+      "avg_seconds_per_input_minute": 2.8989295787337634,
       "last_error": null,
-      "last_success": "2026-04-25T12:06:29.984892+00:00",
-      "samples": 35
+      "last_success": "2026-05-03T11:09:34.569474+00:00",
+      "samples": 42
     }
   },
   "visual": {
@@ -63,10 +63,10 @@
       "samples": 1
     },
     "gpu": {
-      "avg_seconds_per_input_minute": 13.63104930248768,
+      "avg_seconds_per_input_minute": 13.18873740167693,
       "last_error": null,
-      "last_success": "2026-04-25T12:20:22.660953+00:00",
-      "samples": 35
+      "last_success": "2026-05-03T11:26:07.478999+00:00",
+      "samples": 43
     }
   }
 }

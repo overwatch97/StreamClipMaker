@@ -2,38 +2,41 @@
   "game_id": "doom-the-dark-ages",
   "game_name": "DOOM: The Dark Ages",
   "genre": "action-fps",
-  "priority_events": [
-    "glory_kill",
-    "boss_fight",
-    "heavy_metal_drop"
-  ],
-  "ignore_states": [
-    "loading",
-    "cutscene_static"
-  ],
+  "version": "2.0.0",
+  "priority_events": [],
+  "ignore_states": [],
   "context_rules": {
     "expansion_buffer_start": 3.0,
-    "expansion_buffer_end": 7.0,
-    "min_clip_duration": 10.0,
-    "max_clip_duration": 40.0
+    "expansion_buffer_end": 6.0,
+    "min_clip_duration": 8.0,
+    "max_clip_duration": 40.0,
+    "merge_threshold": 5.0
   },
   "score_weights": {
-    "speech": 0.10,
-    "audio": 0.45,
-    "visual": 0.35,
+    "speech":  0.05,
+    "audio":   0.50,
+    "visual":  0.35,
     "emotion": 0.10
   },
-  "event_rules": [
-    {
-      "event": "chainsaw",
-      "visual_prompt": "chainsaw cutting through enemies",
-      "audio_tag": "Chainsaw revving",
-      "min_score": 0.7
-    },
-    {
-      "event": "gore_explosion",
-      "visual_prompt": "red explosions and blood splatter",
-      "min_score": 0.6
-    }
-  ]
+  "arc_labels": {
+    "tension":   "Boss Fight Sequence",
+    "spike":     "Glory Kill Chain",
+    "comedy":    "Unexpected Chaos",
+    "drama":     "Atmospheric Moment",
+    "triumph":   "Boss Defeated",
+    "discovery": "Secret Area Found"
+  },
+  "clip_prompt_templates": {
+    "tension":   "an intense boss battle in DOOM with heavy metal music and demon combat: {context}",
+    "spike":     "a brutal glory kill or chainsaw execution in DOOM The Dark Ages: {context}",
+    "comedy":    "a chaotic unexpected moment in DOOM causing the player to react: {context}",
+    "drama":     "a dark atmospheric cutscene or cinematic moment in DOOM The Dark Ages: {context}",
+    "triumph":   "a player defeating a massive demon boss in DOOM The Dark Ages: {context}",
+    "discovery": "finding a secret weapon or area in DOOM The Dark Ages: {context}"
+  },
+  "ignore_zones": {
+    "flat_motion_threshold": 0.06,
+    "flat_audio_threshold":  0.06,
+    "min_flat_duration":     10
+  }
 }

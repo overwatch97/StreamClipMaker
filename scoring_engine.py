@@ -1,4 +1,5 @@
 import time
+import statistics
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
@@ -8,6 +9,7 @@ from hardware import detect_capabilities, plan_hardware, record_stage_metric
 from multimodal_utils import clip01, infer_stream_duration
 from speech_analyzer import analyze_speech_windows
 from visual_analyzer import extract_visual_feature_series, score_visual_windows
+from game_adapter import GameAdapter
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,7 @@ class SegmentScores:
     emotion: float = 0.0
     momentum: float = 0.0
     total: float = 0.0
+    is_sharp: bool = True
 
     def as_dict(self, digits=4):
         return {
@@ -38,6 +41,7 @@ class SegmentScores:
             "emotion": round(float(self.emotion), digits),
             "momentum": round(float(self.momentum), digits),
             "total": round(float(self.total), digits),
+            "is_sharp": self.is_sharp,
         }
 
 
@@ -111,16 +115,56 @@ def compute_momentum_scores(base_scores):
     return momentum_scores
 
 
-def build_segment_results(windows, speech_rows, audio_rows, visual_rows, emotion_rows):
+def build_segment_results(windows, speech_rows, audio_rows, visual_rows, emotion_rows, game_adapter=None):
+    if not game_adapter:
+        game_adapter = GameAdapter()
+        game_adapter.load_profile("generic")
+        
+    game_adapter.calibrate(windows, audio_rows, visual_rows, emotion_rows, speech_rows)
+    
     base_scores = []
+    past_motion = []
+    past_audio = []
+    past_speech = []
+    
     for index in range(len(windows)):
-        base_score = clip01(
-            (0.25 * speech_rows[index]["score"])
-            + (0.20 * audio_rows[index]["score"])
-            + (0.20 * visual_rows[index]["score"])
-            + (0.25 * emotion_rows[index]["score"])
-        )
+        a = float(audio_rows[index]["score"])
+        v = float(visual_rows[index]["score"])
+        e = float(emotion_rows[index]["score"])
+        s = float(speech_rows[index]["score"])
+        
+        past_motion.append(v)
+        past_audio.append(a)
+        past_speech.append(s)
+        
+        events = game_adapter.detect_events(index, a, v, e, s, past_motion, past_audio, past_speech)
+        
+        # Raw signal fallback
+        raw_score = (a + v + e + s) / 4.0
+        if not events and raw_score > 0.85:
+            events.append("raw_intensity_fallback")
+            
+        base_score = game_adapter.compute_two_layer_score(a, v, e, s, events)
         base_scores.append(base_score)
+
+    # Calculate Sharpness (Z-Score)
+    sharpness_flags = []
+    for i, score in enumerate(base_scores):
+        context = base_scores[max(0, i-5):i] + base_scores[i+1:min(len(base_scores), i+6)]
+        is_sharp = True
+        if len(context) > 1:
+            avg_bg = statistics.mean(context)
+            std_bg = statistics.pstdev(context)
+            if std_bg < 0.10:
+                # Fallback for intense, low-variance scenes
+                if (score - avg_bg) < 0.20:
+                    is_sharp = False
+            else:
+                # Normal Z-Score
+                sharpness = (score - avg_bg) / (std_bg + 0.01)
+                if sharpness < 1.5:
+                    is_sharp = False
+        sharpness_flags.append(is_sharp)
 
     momentum_scores = compute_momentum_scores(base_scores)
 
@@ -134,6 +178,7 @@ def build_segment_results(windows, speech_rows, audio_rows, visual_rows, emotion
             emotion=emotion_rows[index]["score"],
             momentum=momentum_scores[index],
             total=total_score,
+            is_sharp=sharpness_flags[index],
         )
         results.append(
             SegmentResult(
@@ -220,6 +265,7 @@ def run_multimodal_scoring(
     hardware_profile=None,
     hardware_plan=None,
     capabilities=None,
+    game_adapter=None,
 ):
     capabilities = capabilities or detect_capabilities()
     hardware_plan = hardware_plan or plan_hardware(
@@ -266,7 +312,7 @@ def run_multimodal_scoring(
 
     emotion_rows, emotion_meta = score_emotion_windows(face_bundle, audio_bundle, windows)
 
-    segment_results = build_segment_results(windows, speech_rows, audio_rows, visual_rows, emotion_rows)
+    segment_results = build_segment_results(windows, speech_rows, audio_rows, visual_rows, emotion_rows, game_adapter)
     metadata = {
         "duration_secs": infer_stream_duration(
             video_path=video_path,

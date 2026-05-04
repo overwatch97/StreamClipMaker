@@ -2,38 +2,41 @@
   "game_id": "red-dead-redemption-2",
   "game_name": "Red Dead Redemption 2",
   "genre": "open-world-adventure",
-  "priority_events": [
-    "cinematic_moment",
-    "emotional_dialogue",
-    "high_noon_duel"
-  ],
-  "ignore_states": [
-    "horse_travel_long",
-    "fishing_idle",
-    "sleeping"
-  ],
+  "version": "2.0.0",
+  "priority_events": [],
+  "ignore_states": [],
   "context_rules": {
-    "expansion_buffer_start": 8.0,
-    "expansion_buffer_end": 12.0,
+    "expansion_buffer_start": 4.0,
+    "expansion_buffer_end": 8.0,
     "min_clip_duration": 15.0,
-    "max_clip_duration": 60.0
+    "max_clip_duration": 90.0,
+    "merge_threshold": 10.0
   },
   "score_weights": {
-    "speech": 0.40,
-    "audio": 0.10,
-    "visual": 0.20,
-    "emotion": 0.30
+    "speech":  0.30,
+    "audio":   0.25,
+    "visual":  0.25,
+    "emotion": 0.20
   },
-  "event_rules": [
-    {
-      "event": "facial_closeup",
-      "visual_prompt": "close up of a character's face with dramatic lighting",
-      "min_score": 0.5
-    },
-    {
-      "event": "gunfight",
-      "audio_tag": "Slow motion gunshots",
-      "min_score": 0.6
-    }
-  ]
+  "arc_labels": {
+    "tension":   "Tense Evasion Sequence",
+    "spike":     "Intense Confrontation",
+    "comedy":    "Hilarious Moment",
+    "drama":     "Story Beat",
+    "triumph":   "Hard-Earned Victory",
+    "discovery": "Hidden Secret Found"
+  },
+  "clip_prompt_templates": {
+    "tension":   "a cowboy running and hiding from lawmen on horseback in a western setting: {context}",
+    "spike":     "an intense shootout or dramatic confrontation in Red Dead Redemption 2: {context}",
+    "comedy":    "a funny unexpected moment with NPCs or animals in a western open world: {context}",
+    "drama":     "an emotional story cutscene with characters talking in the old west: {context}",
+    "triumph":   "a victorious moment after a long challenge in Red Dead Redemption 2: {context}",
+    "discovery": "discovering a hidden location or secret in a vast western landscape: {context}"
+  },
+  "ignore_zones": {
+    "flat_motion_threshold": 0.04,
+    "flat_audio_threshold":  0.04,
+    "min_flat_duration":     25
+  }
 }

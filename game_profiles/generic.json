@@ -2,43 +2,41 @@
   "game_id": "generic",
   "game_name": "Generic Game",
   "genre": "general",
-  "priority_events": [
-    "spike",
-    "high_energy",
-    "reaction"
-  ],
-  "ignore_states": [
-    "loading_screen",
-    "menu",
-    "lobby"
-  ],
+  "version": "2.0.0",
+  "priority_events": [],
+  "ignore_states": [],
   "context_rules": {
-    "expansion_buffer_start": 6.0,
-    "expansion_buffer_end": 8.0,
-    "min_clip_duration": 15.0,
-    "max_clip_duration": 45.0,
-    "merge_threshold": 10.0
+    "expansion_buffer_start": 4.0,
+    "expansion_buffer_end": 6.0,
+    "min_clip_duration": 10.0,
+    "max_clip_duration": 60.0,
+    "merge_threshold": 8.0
   },
   "score_weights": {
-    "speech": 0.25,
-    "audio": 0.25,
-    "visual": 0.25,
+    "speech":  0.25,
+    "audio":   0.25,
+    "visual":  0.25,
     "emotion": 0.25
   },
-  "spatial_rules": {
-    "dead_zones": [
-      { "name": "center_crosshair", "x_center": 0.5, "y_center": 0.5, "radius": 0.15 }
-    ],
-    "safe_zones": [
-      { "name": "top_center", "x": 0.5, "y": 0.1 }
-    ]
+  "arc_labels": {
+    "tension":   "Suspenseful Sequence",
+    "spike":     "Intense Moment",
+    "comedy":    "Funny Moment",
+    "drama":     "Emotional Scene",
+    "triumph":   "Victory Moment",
+    "discovery": "Surprising Discovery"
   },
-  "event_rules": [
-    {
-      "event": "highlight",
-      "visual_prompt": "exciting gaming moment",
-      "audio_tag": "Excitement",
-      "min_score": 0.5
-    }
-  ]
+  "clip_prompt_templates": {
+    "tension":   "a tense suspenseful sequence in a video game: {context}",
+    "spike":     "an intense exciting action moment in a video game: {context}",
+    "comedy":    "a funny unexpected moment in a video game: {context}",
+    "drama":     "an emotional story moment in a video game: {context}",
+    "triumph":   "a triumphant victory moment in a video game: {context}",
+    "discovery": "a surprising discovery or reveal in a video game: {context}"
+  },
+  "ignore_zones": {
+    "flat_motion_threshold": 0.04,
+    "flat_audio_threshold":  0.04,
+    "min_flat_duration":     20
+  }
 }

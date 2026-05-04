@@ -2,56 +2,53 @@
   "game_id": "generic-fps",
   "game_name": "Generic FPS Shooter",
   "genre": "fps",
-  "priority_events": [
-    "elimination",
-    "clutch_moment",
-    "multikill"
-  ],
-  "ignore_states": [
-    "respawn_screen",
-    "buy_menu",
-    "inventory"
-  ],
+  "version": "2.0.0",
+  "priority_events": [],
+  "ignore_states": [],
   "context_rules": {
-    "expansion_buffer_start": 6.0,
-    "expansion_buffer_end": 8.0,
-    "min_clip_duration": 15.0,
+    "expansion_buffer_start": 5.0,
+    "expansion_buffer_end": 6.0,
+    "min_clip_duration": 8.0,
     "max_clip_duration": 45.0,
-    "merge_threshold": 10.0
+    "merge_threshold": 8.0
   },
   "score_weights": {
-    "speech": 0.40,
-    "audio": 0.30,
-    "visual": 0.10,
-    "emotion": 0.20
+    "speech":  0.25,
+    "audio":   0.35,
+    "visual":  0.25,
+    "emotion": 0.15
   },
   "hud_safe_zones": [
     {
       "name": "top_center",
-      "x_min": 0.4,
-      "y_min": 0.05,
-      "x_max": 0.6,
-      "y_max": 0.2
+      "x_min": 0.4, "y_min": 0.05,
+      "x_max": 0.6, "y_max": 0.20
     },
     {
       "name": "bottom_left_above_health",
-      "x_min": 0.05,
-      "y_min": 0.5,
-      "x_max": 0.25,
-      "y_max": 0.7
+      "x_min": 0.05, "y_min": 0.50,
+      "x_max": 0.25, "y_max": 0.70
     }
   ],
-  "narrative_triggers": {
-    "cause_keywords": ["watch this", "let's go", "push", "behind", "one hp"],
-    "action_visuals": ["kill", "headshot", "explosion"],
-    "result_emotions": ["laugh", "scream", "sigh"]
+  "arc_labels": {
+    "tension":   "Clutch Situation",
+    "spike":     "Kill / Highlight Play",
+    "comedy":    "Hilarious Fail or Moment",
+    "drama":     "Tense Standoff",
+    "triumph":   "Clutch Win",
+    "discovery": "Unexpected Encounter"
   },
-  "event_rules": [
-    {
-      "event": "elimination",
-      "visual_prompt": "player getting a kill in a first person shooter",
-      "audio_tag": "Gunfire",
-      "min_score": 0.6
-    }
-  ]
+  "clip_prompt_templates": {
+    "tension":   "a tense close combat situation in a first person shooter: {context}",
+    "spike":     "a player getting an elimination or multi-kill in a first person shooter: {context}",
+    "comedy":    "a funny fail or unexpected moment in a first person shooter: {context}",
+    "drama":     "a tense standoff or near-death moment in a first person shooter: {context}",
+    "triumph":   "a clutch winning moment in a close first person shooter match: {context}",
+    "discovery": "surprising the enemy with an unexpected flank in a first person shooter: {context}"
+  },
+  "ignore_zones": {
+    "flat_motion_threshold": 0.05,
+    "flat_audio_threshold":  0.05,
+    "min_flat_duration":     15
+  }
 }

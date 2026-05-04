@@ -2,38 +2,41 @@
   "game_id": "overwatch-2",
   "game_name": "Overwatch 2",
   "genre": "hero-shooter",
-  "priority_events": [
-    "ultimate_use",
-    "multikill",
-    "objective_capture"
-  ],
-  "ignore_states": [
-    "hero_select",
-    "spawn_room",
-    "play_of_the_game"
-  ],
+  "version": "2.0.0",
+  "priority_events": [],
+  "ignore_states": [],
   "context_rules": {
-    "expansion_buffer_start": 6.0,
+    "expansion_buffer_start": 5.0,
     "expansion_buffer_end": 4.0,
-    "min_clip_duration": 12.0,
-    "max_clip_duration": 35.0
+    "min_clip_duration": 8.0,
+    "max_clip_duration": 35.0,
+    "merge_threshold": 6.0
   },
   "score_weights": {
-    "speech": 0.25,
-    "audio": 0.25,
-    "visual": 0.40,
-    "emotion": 0.10
+    "speech":  0.20,
+    "audio":   0.30,
+    "visual":  0.35,
+    "emotion": 0.15
   },
-  "event_rules": [
-    {
-      "event": "ultimate_ready",
-      "visual_prompt": "ultimate ability icon glowing blue",
-      "min_score": 0.5
-    },
-    {
-      "event": "team_kill",
-      "audio_tag": "Team Kill sound effect",
-      "min_score": 0.8
-    }
-  ]
+  "arc_labels": {
+    "tension":   "Clutch Standoff",
+    "spike":     "Team Kill / Ult Moment",
+    "comedy":    "Unexpected Play",
+    "drama":     "Comeback Moment",
+    "triumph":   "Clutch Win",
+    "discovery": "Surprise Flank"
+  },
+  "clip_prompt_templates": {
+    "tension":   "an intense close team fight in Overwatch 2 with heroes using abilities: {context}",
+    "spike":     "a player using an ultimate ability and eliminating multiple enemies in Overwatch 2: {context}",
+    "comedy":    "a funny or unexpected play in Overwatch 2: {context}",
+    "drama":     "a dramatic comeback moment in a close Overwatch 2 match: {context}",
+    "triumph":   "a team winning a clutch fight in Overwatch 2: {context}",
+    "discovery": "an unexpected flank or surprise move in Overwatch 2: {context}"
+  },
+  "ignore_zones": {
+    "flat_motion_threshold": 0.05,
+    "flat_audio_threshold":  0.05,
+    "min_flat_duration":     15
+  }
 }

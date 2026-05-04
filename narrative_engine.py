@@ -1,221 +1,289 @@
+"""
+narrative_engine.py — LLM Storyteller
+=======================================
+The LLM's new job: given a detected arc, generate a compelling hook sentence
+and short title. It is NOT used for classification or filtering.
+
+Arc shape detection (arc_detector.py) already decided WHAT the moment is.
+The LLM now decides HOW to frame it for an audience.
+
+If Ollama is unavailable, shape-aware fallback templates are used so
+clips are always produced — just without bespoke hooks.
+"""
+
 import json
-import os
+import logging
 import subprocess
-from dataclasses import dataclass, field
-from typing import List, Dict, Tuple
+import time
+from typing import List, Optional, Dict
 
-from multimodal_utils import collect_transcript_text
+from phase3_types import ArcRegion, ArcShape, ArcShape
 
-@dataclass
-class Scene:
-    start_time: float
-    end_time: float
-    avg_score: float
-    dominant_modality: str
-    transcript: str
-    windows: List[int] = field(default_factory=list)
-    tags: List[str] = field(default_factory=list)
-    summary: str = ""
+logger = logging.getLogger(__name__)
 
-def detect_scenes(segment_results, threshold=0.3, max_scene_duration=60.0) -> List[Scene]:
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Fallback hook templates (used when LLM is unavailable)
+# Indexed by ArcShape.value → list of template strings.
+# The best template is chosen based on available transcript content.
+# ─────────────────────────────────────────────────────────────────────────────
+FALLBACK_HOOKS: Dict[str, List[str]] = {
+    ArcShape.SPIKE.value: [
+        "This moment changed everything...",
+        "Nobody saw this coming.",
+        "Watch what happens next.",
+    ],
+    ArcShape.TENSION.value: [
+        "No horse. No gun. Just survival instinct.",
+        "The longest few minutes of the stream.",
+        "Can they escape? Watch to find out.",
+    ],
+    ArcShape.COMEDY.value: [
+        "This was NOT supposed to happen 😂",
+        "I genuinely could not believe this.",
+        "The game had other plans...",
+    ],
+    ArcShape.DRAMA.value: [
+        "This scene hit different.",
+        "The story gets real here.",
+        "You need to hear this.",
+    ],
+    ArcShape.TRIUMPH.value: [
+        "After all that — the comeback.",
+        "They said it couldn't be done.",
+        "The grind paid off.",
+    ],
+    ArcShape.DISCOVERY.value: [
+        "Wait... what is THAT?",
+        "Nobody talks about this hidden detail.",
+        "Found something the devs didn't want you to see.",
+    ],
+}
+
+FALLBACK_TITLES: Dict[str, str] = {
+    ArcShape.SPIKE.value:     "Insane Action Moment",
+    ArcShape.TENSION.value:   "Tense Chase No One Expected",
+    ArcShape.COMEDY.value:    "Funniest Thing That Happened",
+    ArcShape.DRAMA.value:     "Emotional Story Beat",
+    ArcShape.TRIUMPH.value:   "The Comeback That Shocked Everyone",
+    ArcShape.DISCOVERY.value: "Hidden Secret Discovered",
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NarrativeEngine
+# ─────────────────────────────────────────────────────────────────────────────
+
+class NarrativeEngine:
     """
-    Groups contiguous windows into Scenes based on score stability and modality.
-    Includes a max_scene_duration safety cap to ensure segments are auto-cut properly.
+    Generates hooks, titles, and share-worthiness explanations for detected arcs.
+
+    Workflow:
+      1. Try Ollama (local LLM) for each arc — rich, context-aware hooks
+      2. Fall back to shape-aware template hooks if Ollama is unavailable
     """
-    scenes = []
-    if not segment_results:
-        return scenes
 
-    current_windows = [segment_results[0]]
-    
-    for i in range(1, len(segment_results)):
-        prev = segment_results[i-1]
-        curr = segment_results[i]
-        
-        # Simple heuristic: if score drops significantly or modality changes, split scene
-        score_diff = abs(curr.scores.total - prev.scores.total)
-        
-        # Calculate current scene duration
-        current_duration = curr.window.end_time - current_windows[0].window.start_time
-        
-        if score_diff > threshold or current_duration > max_scene_duration:
-            # Finalize current scene
-            scenes.append(_build_scene(current_windows))
-            current_windows = [curr]
-        else:
-            current_windows.append(curr)
-            
-    if current_windows:
-        scenes.append(_build_scene(current_windows))
-        
-    return scenes
-
-def _build_scene(windows) -> Scene:
-    start = windows[0].window.start_time
-    end = windows[-1].window.end_time
-    avg_score = sum(w.scores.total for w in windows) / len(windows)
-    
-    # Simple transcript collection
-    text = " ".join([w.text for w in windows if w.text])
-    
-    return Scene(
-        start_time=start,
-        end_time=end,
-        avg_score=avg_score,
-        dominant_modality="mixed", # TODO: logic from scoring_engine
-        transcript=text,
-        windows=[w.window.index for w in windows]
-    )
-
-class NarrativeAI:
-    def __init__(self, model="llama3:8b"):
+    def __init__(self, model: str = "llama3:8b"):
         self.model = model
         self.available = False
-        self._check_and_start_server()
+        self._check_ollama()
 
-    def _check_and_start_server(self):
-        """
-        One-time check for Ollama connectivity.
-        Attempts to start the server if it's in the path but not running.
-        """
+    def _check_ollama(self):
+        """Quick connectivity check + optional server start."""
         import requests
-        url = "http://localhost:11434/api/tags" # Lightweight check
+        url = "http://localhost:11434/api/tags"
         try:
-            response = requests.get(url, timeout=2)
-            if response.status_code == 200:
+            r = requests.get(url, timeout=2)
+            if r.status_code == 200:
                 self.available = True
                 return
         except Exception:
             pass
 
-        # If not reachable, try to start it
-        print("Ollama server not detected. Attempting to start 'ollama serve'...", flush=True)
+        logger.info("Ollama not detected — attempting to start 'ollama serve'...")
         try:
-            # Check if ollama is in path
             subprocess.run(["ollama", "--version"], check=True, capture_output=True)
-            # Start in background (using START on windows)
-            # Detached process to avoid hanging the pipeline
-            subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
-            
-            # Wait a few seconds for it to boot
-            import time
+            subprocess.Popen(
+                ["ollama", "serve"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+            )
             for _ in range(5):
                 time.sleep(2)
                 try:
-                    res = requests.get(url, timeout=1)
-                    if res.status_code == 200:
-                        print("Ollama server started successfully.", flush=True)
+                    r = requests.get(url, timeout=1)
+                    if r.status_code == 200:
+                        logger.info("Ollama started successfully.")
                         self.available = True
                         return
                 except Exception:
                     continue
         except Exception:
-            print("Warning: Could not start Ollama automatically. Narrative AI will use score-based fallback.", flush=True)
-        
+            pass
+
+        logger.info("Ollama unavailable — NarrativeEngine will use fallback templates.")
         self.available = False
 
-    def tag_scenes(self, scenes: List[Scene]) -> List[Scene]:
-        """
-        Uses Ollama to tag scenes as Setup, Action, or Reaction.
-        """
-        if not self.available:
-            for scene in scenes:
-                scene.tags = ['action'] if scene.avg_score > 0.6 else ['setup']
-            return scenes
+    # ─────────────────────────────────────────────────────────────────────────
+    # Public API
+    # ─────────────────────────────────────────────────────────────────────────
 
-        for scene in scenes:
-            prompt = (
-                f"Analyze this gaming video scene transcript and categorize its narrative role.\n"
-                f"Transcript: \"{scene.transcript}\"\n\n"
-                f"Rules:\n"
-                f"1. Tag as 'setup' if it's building tension or explaining context.\n"
-                f"2. Tag as 'action' if it's a climax, kill, or high-energy moment.\n"
-                f"3. Tag as 'combat' if it's an intense fighting or battle scene.\n"
-                f"4. Tag as 'reaction' if it's a laugh, scream, or post-moment comment.\n"
-                f"Output ONLY the tag (one word)."
-            )
-            
+    def enrich_arcs(self, arcs: List[ArcRegion], game_name: str = "") -> List[ArcRegion]:
+        """
+        Adds hook_sentence and short_title to each ArcRegion.
+        Returns the same list, mutated in place.
+        """
+        for arc in arcs:
+            self._enrich_single(arc, game_name)
+        return arcs
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Single Arc Enrichment
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _enrich_single(self, arc: ArcRegion, game_name: str = "") -> ArcRegion:
+        if self.available and arc.transcript.strip():
             try:
-                tag = self._query_ollama(prompt).strip().lower()
-                if tag in ['setup', 'action', 'combat', 'reaction']:
-                    scene.tags = [tag]
-                else:
-                    scene.tags = ['action'] if scene.avg_score > 0.6 else ['setup']
-            except Exception:
-                scene.tags = ['action'] if scene.avg_score > 0.6 else ['setup']
-                
-        return scenes
+                result = self._query_ollama_for_arc(arc, game_name)
+                if result:
+                    arc.hook_sentence = result.get("hook", "")
+                    arc.short_title   = result.get("title", "")
+                    return arc
+            except Exception as e:
+                logger.warning(f"NarrativeEngine: LLM enrichment failed for arc at {arc.start:.1f}s: {e}")
 
-    def _query_ollama(self, prompt: str) -> str:
-        if not self.available:
-            return "action"
+        # Fallback
+        arc.hook_sentence = self._fallback_hook(arc)
+        arc.short_title   = self._fallback_title(arc)
+        return arc
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # LLM Query
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _query_ollama_for_arc(self, arc: ArcRegion, game_name: str) -> Optional[Dict]:
+        """
+        Queries Ollama with a structured prompt that describes the arc shape
+        and transcript, and asks for a hook + title in JSON format.
+        """
         import requests
+
+        shape_descriptions = {
+            ArcShape.SPIKE.value:     "a sudden intense action spike (kill, explosion, or dramatic event)",
+            ArcShape.TENSION.value:   "a sustained tension arc — rising danger, chase, evasion, or stealth sequence",
+            ArcShape.COMEDY.value:    "a comedy beat — an unexpected, funny, or absurd moment",
+            ArcShape.DRAMA.value:     "a dramatic scene — emotional dialogue, story revelation, or character moment",
+            ArcShape.TRIUMPH.value:   "a triumph moment — overcoming a difficult challenge after struggle",
+            ArcShape.DISCOVERY.value: "a discovery moment — finding something surprising, hidden, or new",
+        }
+
+        shape_desc = shape_descriptions.get(arc.shape_type.value, "a compelling gaming moment")
+        game_context = f"Game: {game_name}. " if game_name else ""
+        transcript_snippet = arc.transcript[:300].strip() if arc.transcript else "(no dialogue)"
+
+        prompt = (
+            f"You are a YouTube Shorts editor who writes viral hooks for gaming clips.\n\n"
+            f"{game_context}"
+            f"A {arc.duration:.0f}-second clip was detected. It is: {shape_desc}.\n"
+            f"What the player said during this moment: \"{transcript_snippet}\"\n\n"
+            f"Write:\n"
+            f"1. hook — A single sentence (max 12 words) to open the Short. "
+            f"Make it create curiosity or urgency. No clickbait. Be authentic.\n"
+            f"2. title — A YouTube Shorts title (max 8 words). Punchy, specific, not generic.\n\n"
+            f"Respond ONLY with valid JSON: {{\"hook\": \"...\", \"title\": \"...\"}}"
+        )
+
         try:
-            url = "http://localhost:11434/api/generate"
-            payload = {
-                "model": self.model,
-                "prompt": prompt,
-                "stream": False
-            }
-            response = requests.post(url, json=payload, timeout=30)
+            response = requests.post(
+                "http://localhost:11434/api/generate",
+                json={"model": self.model, "prompt": prompt, "stream": False},
+                timeout=25,
+            )
             response.raise_for_status()
-            return response.json().get("response", "action")
+            raw = response.json().get("response", "").strip()
+
+            # Extract JSON even if surrounded by other text
+            match_start = raw.find("{")
+            match_end   = raw.rfind("}") + 1
+            if match_start != -1 and match_end > match_start:
+                parsed = json.loads(raw[match_start:match_end])
+                # Validate expected keys
+                if "hook" in parsed and "title" in parsed:
+                    return parsed
+
         except Exception as e:
-            # We already checked connectivity once, but if it fails mid-run, we mark as unavailable.
             if "connection" in str(e).lower() or "refused" in str(e).lower():
                 self.available = False
-                print(f"Ollama connection lost during tagging: {e}", flush=True)
-            return "action"
+                logger.warning("Ollama connection lost during narrative enrichment.")
+            raise
 
-def stitch_narrative_arcs(scenes: List[Scene], top_k=5, max_arc_duration=90.0) -> List[Dict]:
+        return None
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Fallback template hooks
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _fallback_hook(self, arc: ArcRegion) -> str:
+        """
+        Picks the best fallback hook for this arc.
+        If there's useful transcript content, tries to incorporate it.
+        """
+        shape_key = arc.shape_type.value
+        templates = FALLBACK_HOOKS.get(shape_key, ["Watch this moment."])
+
+        # If transcript has content, try to make the hook slightly more specific
+        if arc.transcript.strip():
+            words = arc.transcript.strip().split()
+            if len(words) >= 4:
+                # Use first 6 words of transcript as raw context
+                snippet = " ".join(words[:6]).rstrip(".,!?")
+                # Only use it if it seems like natural speech (not just noise)
+                if len(snippet) > 10:
+                    return templates[0]  # Still use template — transcript becomes context in title
+
+        # Rotate based on arc start time (deterministic variety)
+        idx = int(arc.start / 60) % len(templates)
+        return templates[idx]
+
+    def _fallback_title(self, arc: ArcRegion) -> str:
+        """Shape-aware fallback title."""
+        shape_key = arc.shape_type.value
+        base_title = FALLBACK_TITLES.get(shape_key, "Epic Gaming Moment")
+
+        # Add approximate timestamp for context
+        minutes = int(arc.start // 60)
+        if minutes > 0:
+            return f"{base_title} (at {minutes}min)"
+        return base_title
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Legacy compatibility — old scene-based API
+# Kept so existing imports in other modules don't break.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def detect_scenes(segment_results, threshold=0.3, max_scene_duration=60.0):
     """
-    Takes high-scoring 'action' scenes and attaches nearby 'setup' and 'reaction' scenes.
-    Ensures final arc doesn't exceed social-media friendly durations.
+    Legacy shim. The new pipeline uses ArcDetector instead of scene grouping.
+    Returns an empty list — hook_analyzer.py now calls ArcDetector directly.
     """
-    arcs = []
-    action_scenes = [s for s in scenes if any(t in s.tags for t in ('action', 'combat'))]
-    action_scenes.sort(key=lambda s: s.avg_score, reverse=True)
-    
-    selected_actions = action_scenes[:top_k]
-    
-    for action in selected_actions:
-        arc_scenes = [action]
-        is_combat = 'combat' in action.tags
-        target_max_duration = 35.0 if is_combat else max_arc_duration
-        
-        # Look for setup before
-        idx = scenes.index(action)
-        if idx > 0:
-            prev = scenes[idx-1]
-            if 'setup' in prev.tags or prev.avg_score > 0.3:
-                # Only add if it doesn't blow the duration cap
-                if (action.end_time - prev.start_time) <= target_max_duration:
-                    arc_scenes.insert(0, prev)
-                
-        # Look for reaction after
-        if idx < len(scenes) - 1:
-            nxt = scenes[idx+1]
-            if 'reaction' in nxt.tags or nxt.avg_score > 0.4:
-                # Only add if it doesn't blow the duration cap
-                if (nxt.end_time - arc_scenes[0].start_time) <= target_max_duration:
-                    arc_scenes.append(nxt)
-                
-        start = arc_scenes[0].start_time
-        end = arc_scenes[-1].end_time
-        
-        # Safety Truncation: if still too long (extreme cases), cap at the Action beat
-        if (end - start) > target_max_duration:
-            end = start + target_max_duration
-        
-        # Final story metadata
-        arcs.append({
-            "start": start,
-            "end": end,
-            "score": int(action.avg_score * 100),
-            "category": "narrative_highlight",
-            "reason": f"Action beat at {action.start_time:.1f}s with connected setup/reaction.",
-            "text": " ".join([s.transcript for s in arc_scenes])
-        })
-        
-    return arcs
+    logger.debug("detect_scenes() called — this is a legacy shim. Use ArcDetector.")
+    return []
+
+
+def stitch_narrative_arcs(scenes, top_k=5, max_arc_duration=90.0):
+    """
+    Legacy shim. Arc stitching is now handled by ArcDetector + story_builder.
+    Returns empty list.
+    """
+    logger.debug("stitch_narrative_arcs() called — this is a legacy shim.")
+    return []
+
+
+class NarrativeAI(NarrativeEngine):
+    """
+    Legacy alias for NarrativeEngine. Kept for backwards compatibility
+    with any code that still imports NarrativeAI.
+    """
+    pass
