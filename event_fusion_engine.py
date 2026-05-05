@@ -13,7 +13,7 @@ class EventFusionEngine:
     MIN_EVENT_DURATION = 3.0
     MAX_EVENT_DURATION = 15.0
     GAP_MERGE_THRESHOLD = 1.5
-    PRE_BUFFER = 0.5
+    PRE_BUFFER = 1.5
     POST_BUFFER = 1.0
 
     def detect(self, timeline: List[TimelineSecond], transcript_data: List[Dict] = None) -> List[EventMoment]:
@@ -25,6 +25,7 @@ class EventFusionEngine:
         features_list = []
 
         # 1. Calculate fusion scores
+        rolling_emotions = []
         for sec in timeline:
             meta = sec.metadata
             a_feat = meta.get("audio_features", {})
@@ -42,9 +43,15 @@ class EventFusionEngine:
             keyword_weight = s_feat.get("keyword_weight", 0.2)
             
             # Face Presence Boost
+            rolling_emotions.append(emotion_score)
+            if len(rolling_emotions) > 5:
+                rolling_emotions.pop(0)
+            local_emotion_avg = sum(rolling_emotions) / len(rolling_emotions)
+            emotion_delta = emotion_score - local_emotion_avg
+
             engagement_level = e_feat.get("engagement_level", 0.0)
             face_visible = engagement_level > 0.01 or emotion_score > 0.05
-            boost = 1.15 if (face_visible and emotion_score > 0.4) else 1.0
+            boost = 1.15 if (face_visible and emotion_score > 0.6 and emotion_delta > 0.15) else 1.0
 
             # Base formula
             base_score = (
@@ -75,6 +82,9 @@ class EventFusionEngine:
 
         # 3. Merge Events
         merged_events = self._merge_events(times, raw_events)
+
+        # 3.5 Split Multi-Peak Events
+        merged_events = self._split_multi_peak_events(scores, merged_events)
 
         # 4. Enforce Duration Constraints & Build Moments
         moments = []
@@ -143,6 +153,50 @@ class EventFusionEngine:
                 merged.append(curr)
         return merged
 
+    def _split_multi_peak_events(self, scores, events):
+        new_events = []
+        for start, end in events:
+            ev_scores = scores[start:end+1]
+            if len(ev_scores) < 5:
+                new_events.append((start, end))
+                continue
+                
+            # Find local maxima
+            peaks = []
+            for i in range(1, len(ev_scores)-1):
+                if ev_scores[i] > ev_scores[i-1] and ev_scores[i] > ev_scores[i+1]:
+                    peaks.append(i)
+            
+            if len(peaks) > 1:
+                primary_peak = max(peaks, key=lambda p: ev_scores[p])
+                primary_val = ev_scores[primary_peak]
+                
+                split_points = []
+                for p in peaks:
+                    if p == primary_peak: continue
+                    if ev_scores[p] >= 0.8 * primary_val:
+                        p1, p2 = min(p, primary_peak), max(p, primary_peak)
+                        if p2 - p1 > 2: # Ensure there is a gap
+                            valley_idx = p1 + int(np.argmin(ev_scores[p1:p2+1]))
+                            if ev_scores[valley_idx] < 0.8 * min(ev_scores[p1], ev_scores[p2]):
+                                split_points.append(start + valley_idx)
+                                
+                if split_points:
+                    split_points = sorted(list(set(split_points)))
+                    last_split = start
+                    for sp in split_points:
+                        if sp > last_split:
+                            new_events.append((last_split, sp))
+                        last_split = sp + 1
+                    if end >= last_split:
+                        new_events.append((last_split, end))
+                else:
+                    new_events.append((start, end))
+            else:
+                new_events.append((start, end))
+                
+        return new_events
+
     def _build_moment(self, start_idx, end_idx, start_time, end_time, times, scores, features_list, transcript_data):
         ev_scores = scores[start_idx:end_idx+1]
         ev_features = features_list[start_idx:end_idx+1]
@@ -152,6 +206,29 @@ class EventFusionEngine:
         peak_time = times[start_idx + local_peak_idx]
         peak_score = ev_scores[local_peak_idx]
         
+        local_average = float(np.mean(ev_scores))
+        peak_prominence = peak_score - local_average
+        
+        # Shape Validation
+        pre_peak = ev_scores[:local_peak_idx]
+        post_peak = ev_scores[local_peak_idx+1:]
+        
+        rise = (peak_score - pre_peak[0]) if len(pre_peak) > 0 else 0
+        drop = (peak_score - post_peak[-1]) if len(post_peak) > 0 else 0
+        
+        if peak_prominence < 0.15:
+            logger.debug(f"Event rejected: Weak peak prominence ({peak_prominence:.3f})")
+            return None
+            
+        high_frames = sum(1 for s in ev_scores if s > local_average + 0.05)
+        if high_frames < 2 and peak_prominence < 0.25:
+            logger.debug(f"Event rejected: Spiked too briefly (< 2 frames > local_avg+0.05) and prominence ({peak_prominence:.3f}) < 0.25")
+            return None
+            
+        if rise < 0.1 and drop < 0.1:
+            logger.debug("Event rejected: Flat curve, no clear rise or drop")
+            return None
+            
         peak_feat = ev_features[local_peak_idx]
         end_feat = ev_features[-1]
         
@@ -198,6 +275,18 @@ class EventFusionEngine:
             logger.debug(f"Event rejected: Weak surprise ({surprise_score:.3f}) and weak payoff ({payoff_score:.3f})")
             return None
 
+        # Confidence Computation
+        variance = float(np.var(ev_scores))
+        signal_consistency = max(0.0, 1.0 - (variance * 5)) 
+        
+        active_modalities = sum(1 for feat, threshold in [
+            ("audio_peak", 0.4), ("motion_delta", 0.4), 
+            ("emotion_score", 0.4), ("speech_energy", 0.4)
+        ] if peak_feat[feat] > threshold)
+        modality_agreement = active_modalities / 4.0
+        
+        event_confidence = min(1.0, (signal_consistency * 0.3) + (modality_agreement * 0.4) + (min(peak_prominence * 2, 1.0) * 0.3))
+
         transcript = ""
         if transcript_data:
             from arc_detector import _collect_transcript_in_range
@@ -216,7 +305,8 @@ class EventFusionEngine:
             priority=priority,
             scene_type=peak_feat["scene_type"],
             features=peak_feat,
-            transcript=transcript
+            transcript=transcript,
+            event_confidence=event_confidence
         )
         
     def _apply_silence_boost(self, moments, timeline):

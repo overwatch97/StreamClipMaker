@@ -46,6 +46,7 @@ class EventMoment:
     short_title: str = ""
     label: str = ""
     clip_prompt: str = ""
+    event_confidence: float = 0.0
 
     def to_clipper_json(self) -> Dict:
         return {
@@ -64,6 +65,7 @@ class EventMoment:
                 "surprise_score": round(self.surprise_score, 3),
                 "conflict_score": round(self.conflict_score, 3),
                 "payoff_score": round(self.payoff_score, 3),
+                "event_confidence": round(self.event_confidence, 3),
             }
         }
 
