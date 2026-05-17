@@ -15,6 +15,7 @@ from multimodal_utils import ProgressReporter
 import narrative_engine
 import editing_brain
 import audio_director
+import performance_store
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -445,6 +446,7 @@ def create_clips(
 
 
     clips_created = 0
+    db_outputs = []
     reporter = ProgressReporter(len(moments), label="Clipping")
 
     for i, moment in enumerate(moments):
@@ -907,6 +909,16 @@ def create_clips(
                         f"Transcript Snippet:\n{moment.get('text')}\n"
                     )
 
+                # Record metadata for the Performance Cockpit
+                db_outputs.append({
+                    "variant_id":      moment.get("id") or moment.get("variant_id") or f"clip_{i+1:03d}_{int(start_time)}",
+                    "parent_event_id": moment.get("parent_id") or moment.get("event_id") or safe_name,
+                    "event_type":      category,
+                    "hook":            moment.get("hook_text") or moment.get("reason", "Interesting Moment"),
+                    "caption_style":   "dynamic" if use_subtitles else "none",
+                    "output_path":     output_file
+                })
+
                 long_duration_target = 600
                 ext_start = max(0, start_time - (long_duration_target / 2))
                 ext_end = min(total_video_duration, ext_start + long_duration_target)
@@ -930,6 +942,11 @@ def create_clips(
 
     if clips_created == 0:
         raise RuntimeError("No clips were successfully created. Check FFmpeg errors above.")
+    
+    # Push all successful clips to the performance database for the Cockpit
+    if db_outputs:
+        print(f"Syncing {len(db_outputs)} clips to performance database...")
+        performance_store.store_initial_data(db_outputs)
 
 
 def run_cli(argv=None):

@@ -862,7 +862,8 @@ class StreamClipApp(ctk.CTk):
             self._build_queue_entry(job, i)
 
     def _build_queue_entry(self, job, index):
-        entry = ctk.CTkFrame(self._queue_list, fg_color="#1A1A2A" if job["status"] != "Running" else "#2A2A4A", corner_radius=8)
+        bg = {"Running": "#2A2A4A", "Done": "#0F2A1A", "Failed": "#2A0F0F"}.get(job["status"], "#1A1A2A")
+        entry = ctk.CTkFrame(self._queue_list, fg_color=bg, corner_radius=8)
         entry.pack(fill="x", pady=4, padx=8)
         
         status_colors = {"Pending": TEXT_DIM, "Running": ACCENT, "Done": SUCCESS_CLR, "Failed": ERR_CLR}
@@ -877,6 +878,17 @@ class StreamClipApp(ctk.CTk):
         lbl_name = ctk.CTkLabel(entry, text=name, font=("Segoe UI", 11), text_color=TEXT_MAIN, anchor="w")
         lbl_name.pack(side="left", fill="x", expand=True, padx=5)
         
+        # Show clip count badge on completed jobs
+        if job["status"] == "Done":
+            clip_count = job.get("clip_count", 0)
+            badge_text = f"🎬 {clip_count} clip{'s' if clip_count != 1 else ''}"
+            badge_color = SUCCESS_CLR if clip_count > 0 else WARN_CLR
+            ctk.CTkLabel(
+                entry, text=badge_text,
+                font=("Segoe UI", 10, "bold"),
+                text_color=badge_color,
+            ).pack(side="right", padx=10)
+
         if job["status"] == "Pending":
             btn_remove = ctk.CTkButton(entry, text="✕", width=30, height=24, fg_color="transparent", 
                                        hover_color="#AA3333", command=lambda idx=index: self._remove_from_queue(idx))
@@ -958,7 +970,10 @@ class StreamClipApp(ctk.CTk):
             self._reset_ui()
             return
 
-        self._clear_console()
+        # Instead of wiping the log, insert a separator so history is preserved
+        self._log(f"\n{'─' * 60}\n", None)
+        self._log(f"📂  Starting: {os.path.basename(next_job['video_path'])}\n", "phase")
+        self._log(f"{'─' * 60}\n", None)
         self._running = True
         self._current_job_id = next_job["id"]
         next_job["status"] = "Running"
@@ -1055,10 +1070,21 @@ class StreamClipApp(ctk.CTk):
         
         if current_job:
             if exit_code == 0:
+                # Count how many .mp4 clips landed in output dir
+                out = current_job.get("output_dir", "")
+                clip_count = 0
+                if out and os.path.isdir(out):
+                    clip_count = len([f for f in os.listdir(out) if f.lower().endswith(".mp4")])
                 current_job["status"] = "Done"
-                self._log(f"\n✅  Job Complete: {os.path.basename(current_job['video_path'])}\n", "success")
+                current_job["clip_count"] = clip_count
+                self._log(
+                    f"\n✅  Job Complete: {os.path.basename(current_job['video_path'])}\n"
+                    f"   📁  {clip_count} clip(s) saved → {out}\n",
+                    "success",
+                )
             else:
                 current_job["status"] = "Failed"
+                current_job["clip_count"] = 0
                 self._log(f"\n❌  Job Failed (code {exit_code}): {os.path.basename(current_job['video_path'])}\n", "error")
         
         self._save_queue()

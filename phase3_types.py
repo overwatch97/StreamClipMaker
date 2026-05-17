@@ -47,12 +47,24 @@ class EventMoment:
     label: str = ""
     clip_prompt: str = ""
     event_confidence: float = 0.0
+    # Phase 1 pacing fields — stamped by EventFusionEngine per pacing profile
+    pre_context_buffer: float = 2.0   # seconds of setup before the action peak
+    post_payoff_buffer: float = 1.5   # seconds of aftermath after the peak region
+    peak_prominence: float = 0.0      # peak score minus local average (for slow-mo gate)
+    hook_style: str = "contextual"    # set by HookGenerator; used in debug metadata
+    # Continuity & Payoff Debug fields
+    resolution_score: float = 0.0
+    payoff_detected: bool = False
+    ending_reason: str = "fixed_buffer"
+    ending_extension_used: float = 0.0
+    transcript_sentence_incomplete: bool = False
 
     def to_clipper_json(self) -> Dict:
         return {
             "start": round(self.start, 3),
             "end": round(self.end, 3),
             "peak_time": round(self.peak_time, 3),
+            "event_type": self.event_type,
             "category": self.event_type.capitalize(),
             "score": int(self.final_score * 100),
             "rank_score": round(self.final_score, 4),
@@ -61,11 +73,25 @@ class EventMoment:
             "hook": self.hook_sentence,
             "title": self.short_title,
             "events": [self.event_type],
+            # Top-level pacing fields consumed directly by editing_engine
+            "pre_context_buffer":  round(self.pre_context_buffer, 2),
+            "post_payoff_buffer":  round(self.post_payoff_buffer, 2),
+            "peak_prominence":     round(self.peak_prominence, 3),
+            "hook_style":          self.hook_style,
+            "features":            self.features,
             "evidence": {
-                "surprise_score": round(self.surprise_score, 3),
-                "conflict_score": round(self.conflict_score, 3),
-                "payoff_score": round(self.payoff_score, 3),
-                "event_confidence": round(self.event_confidence, 3),
+                "surprise_score":    round(self.surprise_score, 3),
+                "conflict_score":    round(self.conflict_score, 3),
+                "payoff_score":      round(self.payoff_score, 3),
+                "event_confidence":  round(self.event_confidence, 3),
+                "peak_prominence":   round(self.peak_prominence, 3),
+                "pre_context_buffer":round(self.pre_context_buffer, 2),
+                "post_payoff_buffer":round(self.post_payoff_buffer, 2),
+                "resolution_score":  round(self.resolution_score, 3),
+                "payoff_detected":   self.payoff_detected,
+                "ending_reason":     self.ending_reason,
+                "ending_extension_used": round(self.ending_extension_used, 2),
+                "transcript_sentence_incomplete": self.transcript_sentence_incomplete
             }
         }
 

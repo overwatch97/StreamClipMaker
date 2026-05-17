@@ -34,7 +34,8 @@ class StageMetrics:
         )
 
     def has_success_history(self):
-        return self.avg_seconds_per_input_minute is not None and self.samples > 0 and bool(self.last_success)
+        # A device has valid history only if it has succeeded before AND didn't just fail
+        return self.avg_seconds_per_input_minute is not None and self.samples > 0 and bool(self.last_success) and not self.last_error
 
     def to_dict(self):
         return {
@@ -58,6 +59,8 @@ class HardwareCapabilities:
     onnx_gpu_reason: str = "CUDAExecutionProvider unavailable"
     nvenc_available: bool = False
     nvenc_reason: str = "NVENC unavailable"
+    mediapipe_gpu_available: bool = False
+    mediapipe_gpu_reason: str = "MediaPipe GPU unavailable"
 
     def gpu_available_for(self, stage):
         stage = str(stage)
@@ -66,7 +69,7 @@ class HardwareCapabilities:
         if stage == "transcribe":
             return bool(self.whisper_gpu_available)
         if stage == "emotion":
-            return bool(self.onnx_cuda_available)
+            return bool(self.mediapipe_gpu_available)
         if stage == "encode":
             return bool(self.nvenc_available)
         return False
@@ -80,7 +83,7 @@ class HardwareCapabilities:
         if stage == "transcribe":
             return self.whisper_gpu_reason
         if stage == "emotion":
-            return self.onnx_gpu_reason
+            return self.mediapipe_gpu_reason
         if stage == "encode":
             return self.nvenc_reason
         return "CPU-only stage"
@@ -233,13 +236,31 @@ def detect_capabilities(ffmpeg_bin="ffmpeg"):
             timeout=10,
         )
         encoder_text = "\n".join([result.stdout or "", result.stderr or ""])
-        if "h264_nvenc" in encoder_text:
+        if "h264_nvenc" in encoder_text or "hevc_nvenc" in encoder_text:
             capabilities.nvenc_available = True
             capabilities.nvenc_reason = "NVENC available"
-        else:
-            capabilities.nvenc_reason = "FFmpeg build does not expose h264_nvenc"
     except Exception as exc:
         capabilities.nvenc_reason = f"NVENC probe failed: {exc}"
+
+    try:
+        import mediapipe as mp
+        from mediapipe.tasks import python
+        # We don't want to download a model just for detection, 
+        # so we check if the task API is at least present and has GPU delegate defined.
+        # Most "cpu-only" builds on Windows will fail during initialization of a GPU task.
+        # We'll do a quick check to see if we can at least define a GPU delegate.
+        try:
+            _ = python.BaseOptions.Delegate.GPU
+            # Note: This doesn't guarantee it *works*, only that the constant is there.
+            # Real detection happens during first run, but this is better than nothing.
+            capabilities.mediapipe_gpu_available = True
+            capabilities.mediapipe_gpu_reason = "MediaPipe GPU delegate available"
+        except AttributeError:
+            capabilities.mediapipe_gpu_available = False
+            capabilities.mediapipe_gpu_reason = "MediaPipe GPU delegate not found in this build"
+    except Exception as exc:
+        capabilities.mediapipe_gpu_available = False
+        capabilities.mediapipe_gpu_reason = f"MediaPipe unavailable: {exc}"
 
     return capabilities
 

@@ -10,7 +10,8 @@
     "expansion_buffer_end": 6.0,
     "min_clip_duration": 8.0,
     "max_clip_duration": 40.0,
-    "merge_threshold": 5.0
+    "merge_threshold": 5.0,
+    "pacing_style": "fps"
   },
   "score_weights": {
     "speech":  0.05,

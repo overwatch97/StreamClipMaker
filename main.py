@@ -5,6 +5,14 @@ import subprocess
 import sys
 import time
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Debug / Developer Flags
+# ─────────────────────────────────────────────────────────────────────────────
+# Set to True to preserve the cache directory after each run.
+# Useful for inspecting segment scores, rejection reasons, and tuning thresholds.
+# Set to False in production for automatic cleanup.
+DEBUG_PRESERVE_CACHE = True
+
 from audio_extractor import extract_audio
 from hardware import build_preflight_lines, default_profile_path, detect_capabilities, plan_hardware
 from runtime_env import build_runtime_env
@@ -259,9 +267,13 @@ def main(
             moments = json.load(f)
         if not moments:
             print("\n⏹  No exciting moments were found in this stream. Try a different video!", flush=True)
-            import shutil
-            if os.path.exists(cache_dir):
-                shutil.rmtree(cache_dir)
+            if not DEBUG_PRESERVE_CACHE:
+                import shutil
+                if os.path.exists(cache_dir):
+                    shutil.rmtree(cache_dir)
+            else:
+                print(f"    🗂  Debug mode: Cache preserved at {cache_dir}", flush=True)
+                print(f"    📊  Inspect segments.json to see raw scores: {segments_path}", flush=True)
             return
     else:
         print("\n❌ Error: Moments file not found after Phase 3.", flush=True)
@@ -340,12 +352,17 @@ def main(
     print(f"\n=== Pipeline Complete in {elapsed / 60:.1f} minutes! ===", flush=True)
     print(f"Check the '{output_dir}' directory for your new YouTube Shorts.", flush=True)
 
-    print("\n--- CLEANUP: Removing temporary cache directory ---")
-    import shutil
-    if os.path.exists(cache_dir):
-        shutil.rmtree(cache_dir)
-        print(f"Deleted: {cache_dir}")
-    print("Cleanup complete!")
+    if not DEBUG_PRESERVE_CACHE:
+        print("\n--- CLEANUP: Removing temporary cache directory ---")
+        import shutil
+        if os.path.exists(cache_dir):
+            shutil.rmtree(cache_dir)
+            print(f"Deleted: {cache_dir}")
+        print("Cleanup complete!")
+    else:
+        print(f"\n--- DEBUG: Cache preserved at {cache_dir} ---")
+        print(f"    segments.json  → {segments_path}")
+        print(f"    moments.json   → {best_moments_path}")
 
 
 if __name__ == "__main__":

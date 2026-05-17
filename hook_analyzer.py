@@ -120,8 +120,31 @@ def analyze_multimodal_highlights(
     arcs = fusion_engine.detect(
         timeline=timeline,
         transcript_data=transcript_data,
+        genre=profile.genre,
+        pacing_style=profile.context_rules.get("pacing_style"),
     )
     print(f"  → {len(arcs)} event moments detected.", flush=True)
+
+    # ── Diagnostic: zero-arc feedback ────────────────────────────────────────
+    if not arcs:
+        stats = fusion_engine.get_stats()
+        print("\n  🚨 DIAGNOSTIC — Zero moments survived quality filtering:", flush=True)
+        print(f"     Peak score detected in stream : {stats.peak_score_seen:.4f}", flush=True)
+        from pacing_profiles import get_pacing_profile, resolve_pacing_style
+        _style = resolve_pacing_style(profile.genre, profile.context_rules.get("pacing_style"))
+        _thresh = get_pacing_profile(_style)
+        print(f"     Pacing style used             : {_style}", flush=True)
+        print(f"     Start threshold required      : {_thresh['start_threshold']:.4f}", flush=True)
+        print(f"     Min intensity required        : {_thresh['min_intensity']:.4f}", flush=True)
+        if stats.best_rejected:
+            br_score, br_reason = stats.best_rejected
+            print(f"     Closest rejected event       : score={br_score:.4f}  reason='{br_reason}'", flush=True)
+        print(
+            f"\n  💡 TIP: If the peak score ({stats.peak_score_seen:.4f}) is close to the threshold,"
+            f" add \"pacing_style\": \"cinematic\" to your game profile JSON.",
+            flush=True,
+        )
+    
     for arc in arcs:
         print(
             f"     [{arc.event_type.upper():10s}] "
@@ -129,6 +152,7 @@ def analyze_multimodal_highlights(
             f"quality={arc.final_score:.2f}",
             flush=True,
         )
+
 
     # ── 4. Game Adapter Enrichment ────────────────────────────────────────────
     print("Running Phase 3: Semantic Enrichment...", flush=True)
@@ -152,7 +176,7 @@ def analyze_multimodal_highlights(
     seen_times = []
 
     # Sort by quality; pick top arcs with minimum temporal separation
-    arcs_sorted = sorted(arcs, key=lambda a: a.quality_score, reverse=True)
+    arcs_sorted = sorted(arcs, key=lambda a: a.final_score, reverse=True)
 
     for arc in arcs_sorted:
         if len(candidates) >= top_k * 2:  # Allow 2× for post-validation filtering

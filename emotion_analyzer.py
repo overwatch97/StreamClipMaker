@@ -132,7 +132,11 @@ def extract_facial_emotion_series(
         if requested_device == "gpu" and not strict_device:
             fallback_error = str(exc)
             actual_device = "cpu"
-            landmarker, mp = get_face_landmarker(device="cpu")
+            print(f"    ⚠️  Emotion GPU failed ({fallback_error}), falling back to CPU...", flush=True)
+            try:
+                landmarker, mp = get_face_landmarker(device="cpu")
+            except Exception as cpu_exc:
+                raise RuntimeError(f"MediaPipe failed on both GPU and CPU. CPU error: {cpu_exc}") from cpu_exc
         else:
             raise
 

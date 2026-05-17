@@ -242,12 +242,37 @@ def _run_visual_stage(video_path, device, strict_device, duration_secs, hardware
 
 def _run_emotion_stage(video_path, facecam_path, device, strict_device, duration_secs, hardware_profile):
     started = time.perf_counter()
-    bundle = extract_facial_emotion_series(
-        video_path,
-        facecam_path=facecam_path,
-        device=device,
-        strict_device=strict_device,
-    )
+    try:
+        bundle = extract_facial_emotion_series(
+            video_path,
+            facecam_path=facecam_path,
+            device=device,
+            strict_device=strict_device,
+        )
+    except (RuntimeError, ImportError) as exc:
+        # mediapipe issues — degrade gracefully with zeroed emotion scores
+        import numpy as np
+        reason = "unavailable" if isinstance(exc, ImportError) else "initialization failed"
+        print(
+            f"    ⚠️  Emotion stage skipped (mediapipe {reason}): {exc}\n"
+            f"    Try: .\\venv\\Scripts\\pip install --upgrade mediapipe",
+            flush=True,
+        )
+        bundle = {
+            "times": [],
+            "emotion_score_norm": [],
+            "surprise_level": [],
+            "engagement_level": [],
+            "reaction_level": [],
+            "metadata": {
+                "sample_fps": 2.0,
+                "fallback_crop": True,
+                "requested_device": device,
+                "actual_device": device,
+                "fallback_error": str(exc),
+                "skipped": True,
+            },
+        }
     elapsed = time.perf_counter() - started
     metadata = bundle.get("metadata", {})
     requested_device = metadata.get("requested_device", device)
@@ -351,3 +376,19 @@ def run_multimodal_scoring(
         },
     }
     return segment_results, metadata
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Performance Layer Variant Scoring
+# ─────────────────────────────────────────────────────────────────────────────
+
+def calculate_variant_score(data: dict) -> float:
+    """
+    Formula: retention * 0.5 + watch_time * 0.3 + likes * 0.2
+    Evaluates variant performance for the self-learning pipeline.
+    """
+    retention = float(data.get("retention", 0.0))
+    watch_time = float(data.get("watch_time", 0.0))
+    likes = float(data.get("likes", 0))
+    
+    return (retention * 0.5) + (watch_time * 0.3) + (likes * 0.2)

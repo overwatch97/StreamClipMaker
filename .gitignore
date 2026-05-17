@@ -12,6 +12,8 @@ models/
 # Local state
 streamclip_prefs.json
 streamclip_queue.json
+*.db
+learning_patterns.json
 
 # IDE
 .vscode/

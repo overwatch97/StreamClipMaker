@@ -4,27 +4,135 @@ from typing import List, Dict, Optional, Tuple
 import numpy as np
 
 from phase3_types import EventMoment, TimelineSecond, EVENT_PRIORITIES
+from pacing_profiles import get_pacing_profile, resolve_pacing_style
 
 logger = logging.getLogger(__name__)
 
+
+class RejectionStats:
+    """Tracks why moments were rejected — for diagnostics and threshold tuning."""
+
+    def __init__(self):
+        self.total_raw = 0
+        self.rejected_duration = 0
+        self.rejected_prominence = 0
+        self.rejected_flat_curve = 0
+        self.rejected_intensity = 0
+        self.rejected_surprise_payoff = 0
+        self.rejected_std_dev = 0
+        self.rejected_continuity = 0  # tracked in hook_analyzer
+        self.final_valid = 0
+        self.peak_score_seen = 0.0
+        self.best_rejected = None  # (score, reason) of the closest-to-threshold reject
+
+    def record_peak(self, score: float):
+        if score > self.peak_score_seen:
+            self.peak_score_seen = score
+
+    def record_reject(self, score: float, reason: str):
+        if self.best_rejected is None or score > self.best_rejected[0]:
+            self.best_rejected = (score, reason)
+
+    def print_summary(self, pacing_style: str, thresholds: dict):
+        total_rejected = (
+            self.rejected_duration + self.rejected_prominence +
+            self.rejected_flat_curve + self.rejected_intensity +
+            self.rejected_surprise_payoff + self.rejected_std_dev
+        )
+        print(f"\n  ── Fusion Engine Rejection Report (pacing={pacing_style}) ──", flush=True)
+        print(f"  Raw segments evaluated   : {self.total_raw}", flush=True)
+        print(f"  Rejected (duration)      : {self.rejected_duration}", flush=True)
+        print(f"  Rejected (prominence)    : {self.rejected_prominence}  [threshold: {thresholds['min_prominence']:.2f}]", flush=True)
+        print(f"  Rejected (flat curve)    : {self.rejected_flat_curve}", flush=True)
+        print(f"  Rejected (intensity)     : {self.rejected_intensity}  [threshold: {thresholds['min_intensity']:.2f}]", flush=True)
+        print(f"  Rejected (surp/payoff)   : {self.rejected_surprise_payoff}  [threshold: {thresholds['min_surprise_payoff']:.2f}]", flush=True)
+        print(f"  Rejected (std_dev flat)  : {self.rejected_std_dev}", flush=True)
+        print(f"  Final valid events       : {self.final_valid}", flush=True)
+        print(f"  Peak score in stream     : {self.peak_score_seen:.4f}", flush=True)
+        if self.best_rejected:
+            print(f"  Closest rejected event   : score={self.best_rejected[0]:.4f}  reason='{self.best_rejected[1]}'", flush=True)
+        print(f"  ─────────────────────────────────────────────────────", flush=True)
+
+
 class EventFusionEngine:
-    START_THRESHOLD = 0.7
-    END_THRESHOLD = 0.5
+    """
+    Detects highlight moments from a multimodal timeline using adaptive
+    pacing-aware thresholds. Profiles are resolved from the game's genre
+    so FPS games stay strict while cinematic games use relaxed detection.
+    """
+
+    # Structural constants — not tuned per pacing style
     MIN_EVENT_DURATION = 3.0
     MAX_EVENT_DURATION = 15.0
     GAP_MERGE_THRESHOLD = 1.5
-    PRE_BUFFER = 1.5
-    POST_BUFFER = 1.0
 
-    def detect(self, timeline: List[TimelineSecond], transcript_data: List[Dict] = None) -> List[EventMoment]:
+    # Human-feel pacing buffers — range values, interpolated per profile
+    # PRE_CONTEXT: how far before the peak we start the clip (gives viewer setup)
+    # POST_PAYOFF: how long after the peak we hold (lets aftermath breathe)
+    PRE_CONTEXT_BUFFER_FPS       = 1.5   # tight — FPS is fast-cut
+    PRE_CONTEXT_BUFFER_CINEMATIC = 2.5   # wide — cinematic needs setup window
+    PRE_CONTEXT_BUFFER_BALANCED  = 2.0   # middle ground
+    POST_PAYOFF_BUFFER_FPS       = 1.0   # short — keep FPS snappy
+    POST_PAYOFF_BUFFER_CINEMATIC = 2.0   # long — preserve laugh/silence/aftermath
+    POST_PAYOFF_BUFFER_BALANCED  = 1.5   # middle ground
+
+    # Legacy aliases kept for fallback compatibility
+    PRE_BUFFER  = 2.0
+    POST_BUFFER = 1.5
+
+    def __init__(self):
+        self._stats = RejectionStats()
+        self._pacing_style = "balanced"
+        self._thresholds = get_pacing_profile("balanced")
+        self._pre_buffer  = self.PRE_CONTEXT_BUFFER_BALANCED
+        self._post_buffer = self.POST_PAYOFF_BUFFER_BALANCED
+
+    def _load_thresholds(self, genre: str, pacing_style_override: str = None):
+        """Resolve pacing style from genre or explicit override, then load thresholds."""
+        self._pacing_style = resolve_pacing_style(genre, pacing_style_override)
+        self._thresholds = get_pacing_profile(self._pacing_style)
+        # Set pacing-aware clip buffers for human-feel editing
+        self._pre_buffer, self._post_buffer = self._resolve_pacing_buffers(self._pacing_style)
+        print(
+            f"  [EventFusion] Pacing style: '{self._pacing_style}' "
+            f"(start≥{self._thresholds['start_threshold']:.2f}, "
+            f"intensity≥{self._thresholds['min_intensity']:.2f}, "
+            f"pre_ctx={self._pre_buffer:.1f}s, post_payoff={self._post_buffer:.1f}s)",
+            flush=True,
+        )
+
+    def _resolve_pacing_buffers(self, pacing_style: str) -> Tuple[float, float]:
+        """
+        Return (pre_context_secs, post_payoff_secs) for the given pacing style.
+        Cinematic → wider buffers for setup + aftermath.
+        FPS → tighter buffers to preserve snappy cut feel.
+        """
+        mapping = {
+            "fps":       (self.PRE_CONTEXT_BUFFER_FPS,       self.POST_PAYOFF_BUFFER_FPS),
+            "cinematic": (self.PRE_CONTEXT_BUFFER_CINEMATIC, self.POST_PAYOFF_BUFFER_CINEMATIC),
+            "balanced":  (self.PRE_CONTEXT_BUFFER_BALANCED,  self.POST_PAYOFF_BUFFER_BALANCED),
+        }
+        return mapping.get(pacing_style, (self.PRE_CONTEXT_BUFFER_BALANCED, self.POST_PAYOFF_BUFFER_BALANCED))
+
+    def detect(
+        self,
+        timeline: List[TimelineSecond],
+        transcript_data: List[Dict] = None,
+        genre: str = "general",
+        pacing_style: str = None,
+    ) -> List[EventMoment]:
         if not timeline:
             return []
+
+        self._stats = RejectionStats()
+        self._load_thresholds(genre, pacing_style)
+        t = self._thresholds  # shorthand
 
         times = []
         scores = []
         features_list = []
 
-        # 1. Calculate fusion scores
+        # ── 1. Build per-window fusion scores ────────────────────────────────
         rolling_emotions = []
         for sec in timeline:
             meta = sec.metadata
@@ -33,116 +141,159 @@ class EventFusionEngine:
             v_feat = meta.get("visual_features", {})
             s_feat = meta.get("speech_features", {})
 
-            audio_peak = a_feat.get("audio_peak_norm", 0.0)
-            emotion_score = e_feat.get("emotion_score_norm", 0.0)
-            surprise_level = e_feat.get("surprise_level", 0.0)
-            motion_delta = v_feat.get("motion_delta_norm", 0.0)
-            scene_conf = v_feat.get("scene_confidence", 0.0)
-            scene_type = v_feat.get("scene_type", "neutral")
+            audio_peak    = a_feat.get("audio_peak_norm", 0.0)
+            emotion_score = e_feat.get("emotion_score_norm", 0.0) if e_feat else 0.0
+            surprise_level= e_feat.get("surprise_level", 0.0) if e_feat else 0.0
+            motion_delta  = v_feat.get("motion_delta_norm", 0.0)
+            scene_conf    = v_feat.get("scene_confidence", 0.0)
+            scene_type    = v_feat.get("scene_type", "neutral")
             speech_energy = s_feat.get("speech_energy_norm", 0.0)
-            keyword_weight = s_feat.get("keyword_weight", 0.2)
-            
+            keyword_weight= s_feat.get("keyword_weight", 0.2)
+
             # Face Presence Boost
             rolling_emotions.append(emotion_score)
             if len(rolling_emotions) > 5:
                 rolling_emotions.pop(0)
             local_emotion_avg = sum(rolling_emotions) / len(rolling_emotions)
             emotion_delta = emotion_score - local_emotion_avg
-
-            engagement_level = e_feat.get("engagement_level", 0.0)
+            engagement_level = e_feat.get("engagement_level", 0.0) if e_feat else 0.0
             face_visible = engagement_level > 0.01 or emotion_score > 0.05
             boost = 1.15 if (face_visible and emotion_score > 0.6 and emotion_delta > 0.15) else 1.0
 
-            # Base formula
             base_score = (
-                (audio_peak * 0.30) +
+                (audio_peak    * 0.30) +
                 (emotion_score * 0.25) +
-                (motion_delta * 0.15) +
-                (scene_conf * 0.10) +
+                (motion_delta  * 0.15) +
+                (scene_conf    * 0.10) +
                 (speech_energy * 0.10) +
-                (keyword_weight * 0.10)
+                (keyword_weight* 0.10)
             )
-            
             final_score = min(base_score * boost, 1.0)
-            
+
+            self._stats.record_peak(final_score)
+
             times.append(sec.timestamp)
             scores.append(final_score)
             features_list.append({
-                "audio_peak": audio_peak,
-                "emotion_score": emotion_score,
+                "audio_peak":     audio_peak,
+                "emotion_score":  emotion_score,
                 "surprise_level": surprise_level,
-                "motion_delta": motion_delta,
-                "scene_type": scene_type,
-                "speech_energy": speech_energy,
+                "motion_delta":   motion_delta,
+                "scene_type":     scene_type,
+                "speech_energy":  speech_energy,
                 "keyword_weight": keyword_weight,
             })
 
-        # 2. Hysteresis Segmentation
-        raw_events = self._segment_hysteresis(times, scores)
+        # ── 2. Adaptive Percentile-Based Dynamic Threshold ────────────────────
+        # The start_threshold from the profile is the *floor*.
+        # We additionally compute a percentile-based threshold from the
+        # actual stream scores and take whichever is lower — this means
+        # a naturally quiet stream will still produce the best moments.
+        score_array = np.array(scores)
+        percentile_threshold = float(np.percentile(score_array, t["percentile_floor"]))
+        effective_start = min(t["start_threshold"], percentile_threshold)
+        effective_end   = min(t["end_threshold"],   effective_start * 0.75)
 
-        # 3. Merge Events
+        logger.debug(
+            f"Profile start={t['start_threshold']:.3f}, "
+            f"P{t['percentile_floor']}={percentile_threshold:.3f} → "
+            f"effective_start={effective_start:.3f}"
+        )
+
+        # ── 3. Hysteresis Segmentation ────────────────────────────────────────
+        raw_events = self._segment_hysteresis(times, scores, effective_start, effective_end)
+
+        # ── 4. Merge nearby events ────────────────────────────────────────────
         merged_events = self._merge_events(times, raw_events)
 
-        # 3.5 Split Multi-Peak Events
+        # ── 5. Split multi-peak events ────────────────────────────────────────
         merged_events = self._split_multi_peak_events(scores, merged_events)
 
-        # 4. Enforce Duration Constraints & Build Moments
+        # ── 6. Validate & Build Moments ───────────────────────────────────────
         moments = []
         for (start_idx, end_idx) in merged_events:
-            ev_times = times[start_idx:end_idx+1]
-            if not ev_times: continue
-            
+            self._stats.total_raw += 1
+            ev_times = times[start_idx:end_idx + 1]
+            if not ev_times:
+                continue
+
             dur = ev_times[-1] - ev_times[0]
             if dur < self.MIN_EVENT_DURATION:
+                self._stats.rejected_duration += 1
                 continue
-                
-            if dur > self.MAX_EVENT_DURATION:
-                # Split event roughly to max duration
-                split_idx = start_idx + int((self.MAX_EVENT_DURATION / dur) * len(ev_times))
-                end_idx = min(split_idx, len(times) - 1)
-                ev_times = times[start_idx:end_idx+1]
 
-            start_time = max(0.0, ev_times[0] - self.PRE_BUFFER)
-            end_time = ev_times[-1] + self.POST_BUFFER
-            
+            if dur > self.MAX_EVENT_DURATION:
+                split_idx = start_idx + int((self.MAX_EVENT_DURATION / dur) * len(ev_times))
+                end_idx   = min(split_idx, len(times) - 1)
+                ev_times  = times[start_idx:end_idx + 1]
+
+            start_time = max(0.0, ev_times[0] - self._pre_buffer)
+            end_time   = ev_times[-1] + self._post_buffer
+
             moment = self._build_moment(
-                start_idx, end_idx, start_time, end_time, 
-                times, scores, features_list, transcript_data
+                start_idx, end_idx, start_time, end_time,
+                times, scores, features_list, transcript_data,
             )
-            
             if moment:
                 moments.append(moment)
+                self._stats.final_valid += 1
 
-        # Apply Silence-Aware Scoring Boost
+        # ── 7. Apply silence boost ────────────────────────────────────────────
         self._apply_silence_boost(moments, timeline)
+
+        # ── 8. Top-N Fallback (NEVER return 0) ───────────────────────────────
+        if not moments:
+            print(
+                f"\n  ⚠️  No moments survived quality filtering. "
+                f"Activating top-{t['fallback_n']} raw segment fallback...",
+                flush=True,
+            )
+            moments = self._top_n_fallback(
+                times, scores, features_list, transcript_data,
+                n=t["fallback_n"],
+            )
+            if moments:
+                print(f"  ✅  Fallback recovered {len(moments)} moment(s).", flush=True)
+
+        # ── 9. Print rejection diagnostics ───────────────────────────────────
+        self._stats.print_summary(self._pacing_style, t)
 
         return sorted(moments, key=lambda m: m.final_score, reverse=True)
 
-    def _segment_hysteresis(self, times, scores):
+    # ─────────────────────────────────────────────────────────────────────────
+    # Hysteresis Segmentation
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _segment_hysteresis(self, times, scores, start_threshold, end_threshold):
         events = []
         in_event = False
         start_idx = 0
-        
+
         for i, score in enumerate(scores):
-            if not in_event and score >= self.START_THRESHOLD:
+            if not in_event and score >= start_threshold:
                 in_event = True
                 start_idx = i
-            elif in_event and score < self.END_THRESHOLD:
-                # Sustained drop requirement (check next few frames if possible)
-                if i + 2 < len(scores) and scores[i+1] < self.END_THRESHOLD and scores[i+2] < self.END_THRESHOLD:
+            elif in_event and score < end_threshold:
+                # Require sustained drop (3 consecutive frames below end_threshold)
+                if i + 2 < len(scores) and scores[i+1] < end_threshold and scores[i+2] < end_threshold:
                     events.append((start_idx, i))
                     in_event = False
                 elif i + 2 >= len(scores):
                     events.append((start_idx, i))
                     in_event = False
-                    
+
         if in_event:
-            events.append((start_idx, len(scores)-1))
-            
+            events.append((start_idx, len(scores) - 1))
+
         return events
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # Merge Events
+    # ─────────────────────────────────────────────────────────────────────────
+
     def _merge_events(self, times, events):
-        if not events: return []
+        if not events:
+            return []
         merged = [events[0]]
         for curr in events[1:]:
             prev = merged[-1]
@@ -153,36 +304,40 @@ class EventFusionEngine:
                 merged.append(curr)
         return merged
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # Split Multi-Peak Events
+    # ─────────────────────────────────────────────────────────────────────────
+
     def _split_multi_peak_events(self, scores, events):
         new_events = []
         for start, end in events:
-            ev_scores = scores[start:end+1]
+            ev_scores = scores[start:end + 1]
             if len(ev_scores) < 5:
                 new_events.append((start, end))
                 continue
-                
-            # Find local maxima
-            peaks = []
-            for i in range(1, len(ev_scores)-1):
-                if ev_scores[i] > ev_scores[i-1] and ev_scores[i] > ev_scores[i+1]:
-                    peaks.append(i)
-            
+
+            peaks = [
+                i for i in range(1, len(ev_scores) - 1)
+                if ev_scores[i] > ev_scores[i-1] and ev_scores[i] > ev_scores[i+1]
+            ]
+
             if len(peaks) > 1:
                 primary_peak = max(peaks, key=lambda p: ev_scores[p])
-                primary_val = ev_scores[primary_peak]
-                
+                primary_val  = ev_scores[primary_peak]
+
                 split_points = []
                 for p in peaks:
-                    if p == primary_peak: continue
+                    if p == primary_peak:
+                        continue
                     if ev_scores[p] >= 0.8 * primary_val:
                         p1, p2 = min(p, primary_peak), max(p, primary_peak)
-                        if p2 - p1 > 2: # Ensure there is a gap
-                            valley_idx = p1 + int(np.argmin(ev_scores[p1:p2+1]))
+                        if p2 - p1 > 2:
+                            valley_idx = p1 + int(np.argmin(ev_scores[p1:p2 + 1]))
                             if ev_scores[valley_idx] < 0.8 * min(ev_scores[p1], ev_scores[p2]):
                                 split_points.append(start + valley_idx)
-                                
+
                 if split_points:
-                    split_points = sorted(list(set(split_points)))
+                    split_points = sorted(set(split_points))
                     last_split = start
                     for sp in split_points:
                         if sp > last_split:
@@ -194,110 +349,184 @@ class EventFusionEngine:
                     new_events.append((start, end))
             else:
                 new_events.append((start, end))
-                
+
         return new_events
 
-    def _build_moment(self, start_idx, end_idx, start_time, end_time, times, scores, features_list, transcript_data):
-        ev_scores = scores[start_idx:end_idx+1]
-        ev_features = features_list[start_idx:end_idx+1]
-        
-        # Peak Detection Inside Event
-        local_peak_idx = int(np.argmax(ev_scores))
-        peak_time = times[start_idx + local_peak_idx]
-        peak_score = ev_scores[local_peak_idx]
-        
-        local_average = float(np.mean(ev_scores))
+    # ─────────────────────────────────────────────────────────────────────────
+    # Build Moment
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _build_moment(self, start_idx, end_idx, start_time, end_time,
+                      times, scores, features_list, transcript_data):
+        t = self._thresholds
+        ev_scores   = scores[start_idx:end_idx + 1]
+        ev_features = features_list[start_idx:end_idx + 1]
+
+        local_peak_idx  = int(np.argmax(ev_scores))
+        peak_time       = times[start_idx + local_peak_idx]
+        peak_score      = ev_scores[local_peak_idx]
+
+        local_average   = float(np.mean(ev_scores))
         peak_prominence = peak_score - local_average
-        
-        # Shape Validation
-        pre_peak = ev_scores[:local_peak_idx]
-        post_peak = ev_scores[local_peak_idx+1:]
-        
-        rise = (peak_score - pre_peak[0]) if len(pre_peak) > 0 else 0
-        drop = (peak_score - post_peak[-1]) if len(post_peak) > 0 else 0
-        
-        if peak_prominence < 0.15:
-            logger.debug(f"Event rejected: Weak peak prominence ({peak_prominence:.3f})")
+
+        pre_peak  = ev_scores[:local_peak_idx]
+        post_peak = ev_scores[local_peak_idx + 1:]
+        rise = (peak_score - pre_peak[0])  if len(pre_peak)  > 0 else 0.0
+        drop = (peak_score - post_peak[-1]) if len(post_peak) > 0 else 0.0
+
+        self._stats.record_peak(peak_score)
+
+        # ── Guard: Peak Prominence ────────────────────────────────────────────
+        if peak_prominence < t["min_prominence"]:
+            self._stats.rejected_prominence += 1
+            self._stats.record_reject(peak_score, f"low prominence ({peak_prominence:.3f}<{t['min_prominence']:.3f})")
+            logger.debug(f"Rejected: weak prominence {peak_prominence:.3f} < {t['min_prominence']:.3f}")
             return None
-            
+
         high_frames = sum(1 for s in ev_scores if s > local_average + 0.05)
-        if high_frames < 2 and peak_prominence < 0.25:
-            logger.debug(f"Event rejected: Spiked too briefly (< 2 frames > local_avg+0.05) and prominence ({peak_prominence:.3f}) < 0.25")
+        if high_frames < 2 and peak_prominence < (t["min_prominence"] * 1.5):
+            self._stats.rejected_prominence += 1
+            self._stats.record_reject(peak_score, f"brief spike (frames>{local_average+0.05:.3f}={high_frames})")
+            logger.debug(f"Rejected: too brief (high_frames={high_frames})")
             return None
-            
-        if rise < 0.1 and drop < 0.1:
-            logger.debug("Event rejected: Flat curve, no clear rise or drop")
+
+        # ── Guard: Flat Curve ─────────────────────────────────────────────────
+        if rise < 0.05 and drop < 0.05:
+            self._stats.rejected_flat_curve += 1
+            self._stats.record_reject(peak_score, f"flat curve (rise={rise:.3f}, drop={drop:.3f})")
+            logger.debug(f"Rejected: flat curve rise={rise:.3f} drop={drop:.3f}")
             return None
-            
+
+        # ── Guard: Std-Dev Flatness ───────────────────────────────────────────
+        std_dev = np.std(ev_scores) if len(ev_scores) > 1 else 0.0
+        if std_dev < 0.04 and peak_score < (t["min_intensity"] * 1.1):
+            self._stats.rejected_std_dev += 1
+            self._stats.record_reject(peak_score, f"flat stddev ({std_dev:.3f})")
+            logger.debug(f"Rejected: flat stddev {std_dev:.3f}, peak {peak_score:.3f}")
+            return None
+
         peak_feat = ev_features[local_peak_idx]
-        end_feat = ev_features[-1]
-        
-        # Sub-scores
+        end_feat  = ev_features[-1]
+
         surprise_score = peak_feat["motion_delta"] + peak_feat["audio_peak"] + peak_feat["surprise_level"]
-        
-        is_combat = peak_feat["scene_type"] == "combat"
+        is_combat      = peak_feat["scene_type"] == "combat"
         conflict_score = (1.0 if is_combat else 0.0) + peak_feat["speech_energy"]
-        
-        # Payoff Score
+
         post_peak_scores = ev_scores[local_peak_idx:]
         drop_slope = 0.0
         if len(post_peak_scores) > 2:
             drop_slope = post_peak_scores[0] - post_peak_scores[-1]
-            
-        audio_drop = peak_feat["audio_peak"] - end_feat["audio_peak"]
+        audio_drop  = peak_feat["audio_peak"]  - end_feat["audio_peak"]
         motion_drop = peak_feat["motion_delta"] - end_feat["motion_delta"]
-        payoff_score = peak_score + max(0.0, drop_slope) + max(0.0, audio_drop) + max(0.0, motion_drop)
-        
-        # Event Type Resolution
+        payoff_score= peak_score + max(0.0, drop_slope) + max(0.0, audio_drop) + max(0.0, motion_drop)
+
+        # ── Guard: Minimum Intensity ──────────────────────────────────────────
+        if peak_score < t["min_intensity"]:
+            self._stats.rejected_intensity += 1
+            self._stats.record_reject(peak_score, f"intensity ({peak_score:.3f}<{t['min_intensity']:.3f})")
+            logger.debug(f"Rejected: intensity {peak_score:.3f} < {t['min_intensity']:.3f}")
+            return None
+
+        # ── Guard: Surprise / Payoff ──────────────────────────────────────────
+        if surprise_score < t["min_surprise_payoff"] and payoff_score < t["min_surprise_payoff"]:
+            self._stats.rejected_surprise_payoff += 1
+            self._stats.record_reject(
+                peak_score,
+                f"weak surprise ({surprise_score:.3f}) & payoff ({payoff_score:.3f}) < {t['min_surprise_payoff']:.3f}",
+            )
+            logger.debug(f"Rejected: surprise={surprise_score:.3f} payoff={payoff_score:.3f}")
+            return None
+
+        # ── Event Type ────────────────────────────────────────────────────────
         event_type = "neutral"
         if surprise_score > 1.8:
             event_type = "surprise"
         elif conflict_score > 1.2:
             event_type = "combat"
-        elif peak_feat["emotion_score"] > 0.6:
+        elif peak_feat["emotion_score"] > 0.5:
             event_type = "reaction"
         elif peak_feat["scene_type"] == "travel":
             event_type = "travel"
-            
+
         priority = EVENT_PRIORITIES.get(event_type, 1)
-        
-        # Clip Quality Guard
-        std_dev = np.std(ev_scores) if len(ev_scores) > 1 else 0.0
-        if std_dev < 0.05 and peak_score < 0.8:
-            logger.debug(f"Event rejected: Flat intensity curve (std={std_dev:.3f}, peak={peak_score:.3f})")
-            return None 
-            
-        # Strict Filtering Rules (Intensity > 0.7 AND (Surprise > 0.6 OR Payoff > 0.6))
-        if peak_score < 0.7:
-            logger.debug(f"Event rejected: Intensity too low ({peak_score:.3f})")
-            return None
-        if surprise_score < 0.6 and payoff_score < 0.6:
-            logger.debug(f"Event rejected: Weak surprise ({surprise_score:.3f}) and weak payoff ({payoff_score:.3f})")
-            return None
 
-        # Confidence Computation
+        # ── Confidence ────────────────────────────────────────────────────────
         variance = float(np.var(ev_scores))
-        signal_consistency = max(0.0, 1.0 - (variance * 5)) 
-        
-        active_modalities = sum(1 for feat, threshold in [
-            ("audio_peak", 0.4), ("motion_delta", 0.4), 
-            ("emotion_score", 0.4), ("speech_energy", 0.4)
-        ] if peak_feat[feat] > threshold)
+        signal_consistency = max(0.0, 1.0 - (variance * 5))
+        active_modalities = sum(
+            1 for feat, threshold in [
+                ("audio_peak", 0.35), ("motion_delta", 0.35),
+                ("emotion_score", 0.35), ("speech_energy", 0.35),
+            ]
+            if peak_feat[feat] > threshold
+        )
         modality_agreement = active_modalities / 4.0
-        
-        event_confidence = min(1.0, (signal_consistency * 0.3) + (modality_agreement * 0.4) + (min(peak_prominence * 2, 1.0) * 0.3))
+        event_confidence = min(
+            1.0,
+            (signal_consistency * 0.3) +
+            (modality_agreement * 0.4) +
+            (min(peak_prominence * 2, 1.0) * 0.3),
+        )
 
+        # ── Adaptive Payoff Extension ─────────────────────────────────────────
+        from payoff_detector import evaluate_resolution, is_sentence_incomplete
+        
+        MAX_PAYOFF_EXTENSION = 4.0
+        original_end_time = end_time
+        max_end_time = end_time + MAX_PAYOFF_EXTENSION
+        
+        payoff_detected = False
+        resolution_score = 0.0
+        ending_reason = "fixed_buffer"
+        
+        current_end_time = original_end_time
+        step_size = 1.0
+        
+        while current_end_time <= max_end_time:
+            # Safely get index for the current timeline second
+            current_idx = min(len(times) - 1, int(current_end_time))
+            if current_idx < 0: current_idx = 0
+            
+            current_features = features_list[current_idx]
+            current_audio = current_features.get("audio_peak", 0.0)
+            current_motion = current_features.get("motion_delta", 0.0)
+            
+            transcript_so_far = ""
+            if transcript_data:
+                from arc_detector import _collect_transcript_in_range
+                transcript_so_far = _collect_transcript_in_range(transcript_data, start_time, current_end_time)
+                
+            payoff_detected, res_score, reason = evaluate_resolution(
+                peak_features=peak_feat,
+                current_end_features=current_features,
+                post_peak_audio=current_audio,
+                post_peak_motion=current_motion,
+                transcript=transcript_so_far
+            )
+            
+            if payoff_detected:
+                resolution_score = res_score
+                ending_reason = reason
+                break
+                
+            current_end_time += step_size
+            
+        final_end_time = min(current_end_time, max_end_time)
+        extension_used = final_end_time - original_end_time
+        
         transcript = ""
         if transcript_data:
             from arc_detector import _collect_transcript_in_range
-            transcript = _collect_transcript_in_range(transcript_data, start_time, end_time)
+            transcript = _collect_transcript_in_range(transcript_data, start_time, final_end_time)
+            
+        transcript_sentence_incomplete = is_sentence_incomplete(transcript)
 
         return EventMoment(
             event_type=event_type,
             start=start_time,
-            end=end_time,
+            end=final_end_time,
             peak_time=peak_time,
-            duration=end_time - start_time,
+            duration=final_end_time - start_time,
             final_score=peak_score,
             surprise_score=surprise_score,
             conflict_score=conflict_score,
@@ -306,13 +535,105 @@ class EventFusionEngine:
             scene_type=peak_feat["scene_type"],
             features=peak_feat,
             transcript=transcript,
-            event_confidence=event_confidence
+            event_confidence=event_confidence,
+            pre_context_buffer=self._pre_buffer,
+            post_payoff_buffer=self._post_buffer,
+            peak_prominence=peak_prominence,
+            resolution_score=resolution_score,
+            payoff_detected=payoff_detected,
+            ending_reason=ending_reason,
+            ending_extension_used=extension_used,
+            transcript_sentence_incomplete=transcript_sentence_incomplete
         )
-        
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Top-N Fallback (ensures system NEVER returns 0 clips)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _top_n_fallback(self, times, scores, features_list, transcript_data, n=2):
+        """
+        Select the top-N highest scoring windows as emergency clip candidates.
+        These bypass quality guards entirely — they are the best of what exists.
+        A minimum separation of 60s is enforced to avoid clustering.
+        """
+        MIN_SEPARATION = 60.0
+        indexed = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
+
+        selected = []
+        used_times = []
+
+        for idx, score in indexed:
+            if len(selected) >= n:
+                break
+            t_sec = times[idx]
+            if any(abs(t_sec - used) < MIN_SEPARATION for used in used_times):
+                continue
+
+            feat = features_list[idx]
+            surprise_score = feat["motion_delta"] + feat["audio_peak"] + feat["surprise_level"]
+            conflict_score = feat["speech_energy"]
+            payoff_score   = score
+
+            start_time = max(0.0, t_sec - self._pre_buffer - 3.0)
+            end_time   = t_sec + self._post_buffer + 3.0
+
+            transcript = ""
+            if transcript_data:
+                from arc_detector import _collect_transcript_in_range
+                transcript = _collect_transcript_in_range(transcript_data, start_time, end_time)
+
+            moment = EventMoment(
+                event_type="neutral",
+                start=start_time,
+                end=end_time,
+                peak_time=t_sec,
+                duration=end_time - start_time,
+                final_score=score,
+                surprise_score=surprise_score,
+                conflict_score=conflict_score,
+                payoff_score=payoff_score,
+                priority=1,
+                scene_type=feat.get("scene_type", "neutral"),
+                features=feat,
+                transcript=transcript,
+                event_confidence=0.3,  # Low confidence — fallback only
+                pre_context_buffer=self._pre_buffer,
+                post_payoff_buffer=self._post_buffer,
+                peak_prominence=0.0,   # unknown in fallback path
+                resolution_score=0.0,
+                payoff_detected=False,
+                ending_reason="fallback",
+                ending_extension_used=0.0,
+                transcript_sentence_incomplete=False
+            )
+            selected.append(moment)
+            used_times.append(t_sec)
+            print(
+                f"    [Fallback] Clip at t={t_sec:.1f}s  score={score:.4f}  "
+                f"(audio={feat['audio_peak']:.3f}, motion={feat['motion_delta']:.3f}, "
+                f"speech={feat['speech_energy']:.3f})",
+                flush=True,
+            )
+
+        return selected
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Silence Boost
+    # ─────────────────────────────────────────────────────────────────────────
+
     def _apply_silence_boost(self, moments, timeline):
         for m in moments:
-            post_peak_secs = [s for s in timeline if m.peak_time < s.timestamp <= m.peak_time + 3.0]
-            if post_peak_secs:
-                avg_audio = np.mean([s.metadata.get("audio_features", {}).get("audio_peak_norm", 0.0) for s in post_peak_secs])
-                if avg_audio < 0.2: 
-                    m.payoff_score *= 1.25 # Boost retention/payoff
+            post_peak = [
+                s for s in timeline
+                if m.peak_time < s.timestamp <= m.peak_time + 3.0
+            ]
+            if post_peak:
+                avg_audio = np.mean([
+                    s.metadata.get("audio_features", {}).get("audio_peak_norm", 0.0)
+                    for s in post_peak
+                ])
+                if avg_audio < 0.2:
+                    m.payoff_score *= 1.25
+
+    def get_stats(self) -> RejectionStats:
+        return self._stats
