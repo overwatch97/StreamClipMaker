@@ -26,14 +26,6 @@ def _init_db():
         ''')
         # Ensure new schema columns exist without wiping the DB
         try:
-            conn.execute('ALTER TABLE variants ADD COLUMN human_rating TEXT DEFAULT "PENDING"')
-        except sqlite3.OperationalError:
-            pass
-        try:
-            conn.execute('ALTER TABLE variants ADD COLUMN feedback_tags TEXT DEFAULT ""')
-        except sqlite3.OperationalError:
-            pass
-        try:
             conn.execute('ALTER TABLE variants ADD COLUMN parent_event_id TEXT DEFAULT "unknown"')
         except sqlite3.OperationalError:
             pass
@@ -44,14 +36,39 @@ def _init_db():
 
 def store_initial_data(outputs: List[Dict[str, Any]]):
     _init_db()
+    
+    # Import locally to avoid circular dependencies if any
+    import review_store
+    
     with sqlite3.connect(DB_PATH) as conn:
         for out in outputs:
+            # 1. Old variants table for backward compatibility
             conn.execute('''
                 INSERT OR IGNORE INTO variants 
                 (variant_id, event_type, hook, caption_style, parent_event_id, output_path)
                 VALUES (?, ?, ?, ?, ?, ?)
             ''', (out['variant_id'], out.get('event_type'), out.get('hook'), out.get('caption_style'), out.get('parent_event_id', 'unknown'), out.get('output_path', '')))
-    logger.info(f"Stored {len(outputs)} variants in performance store.")
+            
+    for out in outputs:
+        # 2. New review architecture
+        review_store.ingest_clip({
+            "clip_id": out['variant_id'],
+            "event_id": out.get('parent_event_id', 'unknown_event'),
+            "variant_group_id": out.get('parent_event_id', 'unknown_event'), # Can separate later if needed
+            "variant_type": "facecam" if "facecam" in out.get('output_path', '').lower() else "clean",
+            "category": out.get('event_type', 'neutral'),
+            "source_video": "",
+            "clip_path": out.get('output_path', ''),
+            "start_time": out.get('start_time', 0.0),
+            "end_time": out.get('end_time', 0.0),
+            "duration": out.get('duration', 0.0),
+            "model_generated_score": out.get('score', 0.0),
+            "model_version": "v1",
+            "generation_reason": out.get('hook', 'auto_generated'),
+            "generation_signals": "{}"
+        })
+            
+    logger.info(f"Stored {len(outputs)} variants in performance store and review queue.")
 
 def update_metrics(variant_id: str, views: int, watch_time: float, retention: float, likes: int):
     _init_db()
@@ -62,15 +79,6 @@ def update_metrics(variant_id: str, views: int, watch_time: float, retention: fl
             WHERE variant_id = ?
         ''', (views, watch_time, retention, likes, variant_id))
 
-def store_human_feedback(variant_id: str, rating: str, tags: str = ""):
-    _init_db()
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute('''
-            UPDATE variants 
-            SET human_rating = ?, feedback_tags = ?
-            WHERE variant_id = ?
-        ''', (rating, tags, variant_id))
-    logger.info(f"Stored human feedback for {variant_id}: {rating} ({tags})")
         
 def get_all_variants() -> List[Dict[str, Any]]:
     _init_db()

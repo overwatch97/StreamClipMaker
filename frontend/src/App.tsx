@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Play, TrendingUp, ListVideo, SplitSquareHorizontal } from 'lucide-react';
 import ClipReviewPanel from './components/ClipReviewPanel';
 import VariantComparison from './components/VariantComparison';

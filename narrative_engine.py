@@ -53,6 +53,31 @@ FALLBACK_HOOKS: Dict[str, List[str]] = {
         "The story gets real here.",
         "You need to hear this.",
     ],
+    "HIGH_SPEED": [
+        "This run just kept getting faster.",
+        "The speed here is unreal.",
+        "Watch this racing line hold.",
+    ],
+    "DRIFT": [
+        "This drift chain was too clean.",
+        "That corner control was perfect.",
+        "The slide just kept going.",
+    ],
+    "CRASH": [
+        "That impact came out of nowhere.",
+        "This race changed in one hit.",
+        "The recovery after this is wild.",
+    ],
+    "SPEED_BURST": [
+        "The acceleration here changed everything.",
+        "This burst opened the whole race.",
+        "The car just came alive.",
+    ],
+    "RACING_MOMENT": [
+        "This racing moment needed room to breathe.",
+        "The buildup made this run work.",
+        "This is pure racing momentum.",
+    ],
 }
 
 FALLBACK_TITLES: Dict[str, str] = {
@@ -61,6 +86,11 @@ FALLBACK_TITLES: Dict[str, str] = {
     "reaction": "Funniest Thing That Happened",
     "neutral":  "Emotional Story Beat",
     "surprise": "Hidden Secret Discovered",
+    "HIGH_SPEED": "High Speed Run",
+    "DRIFT": "Perfect Drift Chain",
+    "CRASH": "Racing Crash Moment",
+    "SPEED_BURST": "Speed Burst",
+    "RACING_MOMENT": "Racing Momentum",
 }
 
 
@@ -137,26 +167,37 @@ class NarrativeEngine:
     # ─────────────────────────────────────────────────────────────────────────
 
     def _enrich_single(self, arc: EventMoment, game_name: str = "") -> EventMoment:
-        if self.available and arc.transcript.strip():
-            try:
-                result = self._query_ollama_for_arc(arc, game_name)
-                if result:
-                    arc.hook_sentence = result.get("hook", "")
-                    arc.short_title   = result.get("title", "")
-                    return arc
-            except Exception as e:
-                logger.warning(f"NarrativeEngine: LLM enrichment failed for arc at {arc.start:.1f}s: {e}")
+        try:
+            if self.available and arc.transcript.strip():
+                # Narrative is enrichment only. One normal attempt plus one short retry,
+                # then immediate fallback so rendering is never blocked by Ollama.
+                for timeout in (25, 8):
+                    try:
+                        result = self._query_ollama_for_arc(arc, game_name, timeout=timeout)
+                        if result:
+                            arc.hook_sentence = result.get("hook", "")
+                            arc.short_title = result.get("title", "")
+                            if not arc.label:
+                                arc.label = self._fallback_title(arc)
+                            return arc
+                    except Exception as e:
+                        logger.warning(f"NarrativeEngine: LLM enrichment failed for arc at {arc.start:.1f}s: {e}")
+                        if not self.available:
+                            break
+        except Exception as e:
+            logger.warning(f"NarrativeEngine: non-blocking narrative fallback at {arc.start:.1f}s: {e}")
 
-        # Fallback
         arc.hook_sentence = self._fallback_hook(arc)
-        arc.short_title   = self._fallback_title(arc)
+        arc.short_title = self._fallback_title(arc)
+        if not arc.label:
+            arc.label = arc.short_title
         return arc
 
     # ─────────────────────────────────────────────────────────────────────────
     # LLM Query
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _query_ollama_for_arc(self, arc: EventMoment, game_name: str) -> Optional[Dict]:
+    def _query_ollama_for_arc(self, arc: EventMoment, game_name: str, timeout: int = 25) -> Optional[Dict]:
         """
         Queries Ollama with a structured prompt that describes the arc shape
         and transcript, and asks for a hook + title in JSON format.
@@ -169,6 +210,11 @@ class NarrativeEngine:
             "reaction": "a comedy beat or strong reaction — an unexpected, funny, or absurd moment",
             "neutral":  "a dramatic scene — emotional dialogue, story revelation, or character moment",
             "surprise": "a discovery moment — finding something surprising, hidden, or new",
+            "HIGH_SPEED": "a sustained high-speed racing run with strong momentum",
+            "DRIFT": "a controlled drift chain through racing corners",
+            "CRASH": "a racing crash, collision, or sudden loss of control",
+            "SPEED_BURST": "a burst of acceleration or boost in a racing game",
+            "RACING_MOMENT": "a cinematic racing moment with sustained motion",
         }
 
         shape_desc = shape_descriptions.get(arc.event_type, "a compelling gaming moment")
@@ -191,7 +237,7 @@ class NarrativeEngine:
             response = requests.post(
                 "http://localhost:11434/api/generate",
                 json={"model": self.model, "prompt": prompt, "stream": False},
-                timeout=25,
+                timeout=timeout,
             )
             response.raise_for_status()
             raw = response.json().get("response", "").strip()

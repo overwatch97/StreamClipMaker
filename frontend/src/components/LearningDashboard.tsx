@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { BrainCircuit, Activity, Zap, ShieldAlert } from 'lucide-react';
 
 export default function LearningDashboard() {

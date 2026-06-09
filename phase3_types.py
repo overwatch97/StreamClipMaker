@@ -23,6 +23,11 @@ EVENT_PRIORITIES = {
     "surprise": 10,
     "reaction": 9,
     "combat": 7,
+    "CRASH": 8,
+    "DRIFT": 6,
+    "HIGH_SPEED": 6,
+    "SPEED_BURST": 5,
+    "RACING_MOMENT": 4,
     "travel": 3,
     "neutral": 1
 }
@@ -180,6 +185,10 @@ class GameProfile:
     spatial_rules: Dict[str, Any] = field(default_factory=dict)
     audio_weights: Optional[Dict[str, float]] = None
     transitions: Optional[Dict[str, Any]] = None
+    thresholds: Dict[str, float] = field(default_factory=dict)
+    weights: Dict[str, float] = field(default_factory=dict)
+    clip_rules: Dict[str, float] = field(default_factory=dict)
+    pacing_style: Optional[str] = None
     version: str = "1.0.0"
 
     @classmethod
@@ -196,6 +205,10 @@ class GameProfile:
             spatial_rules=data.get("spatial_rules", {}),
             audio_weights=data.get("audio_weights"),
             transitions=data.get("transitions"),
+            thresholds=data.get("thresholds", {}),
+            weights=data.get("weights", {}),
+            clip_rules=data.get("clip_rules", {}),
+            pacing_style=data.get("pacing_style"),
             version=data.get("version", "1.0.0")
         )
 
@@ -241,6 +254,7 @@ class HighlightCandidate:
             "start": round(self.start, 3),
             "end": round(self.end, 3),
             "peak_time": round(self.anchor_event.timestamp, 3),
+            "event_type": self.anchor_event.event_type,
             "category": self.category,
             "score": int(self.score * 100),
             "rank_score": round(self.rank_score, 4),

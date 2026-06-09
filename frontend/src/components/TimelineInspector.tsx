@@ -1,5 +1,5 @@
-import React from 'react';
-import { Activity, PlaySquare, Eye, ListVideo } from 'lucide-react';
+
+import { Activity, PlaySquare, } from 'lucide-react';
 
 export default function TimelineInspector() {
   return (

@@ -43,6 +43,7 @@ def expand_arc(
     """
     shape   = arc.event_type
     min_dur, max_dur = ARC_DURATION_RULES.get(shape, (5, 60))
+    is_racing = profile is not None and profile.genre == "racing"
 
     # Shape-specific boundary strategy
     # Shape-specific boundary strategy
@@ -80,6 +81,21 @@ def expand_arc(
     # Minimum duration floor
     if (end - start) < min_dur:
         end = start + min_dur
+
+    if is_racing:
+        # Racing clips need buildup, acceleration, payoff, and recovery.
+        # This genre-gated override leaves FPS/action clip pacing unchanged.
+        rules = getattr(profile, "clip_rules", {}) or {}
+        min_dur = float(rules.get("min_duration", 20))
+        max_dur = float(rules.get("max_duration", 60))
+        pre_context = float(rules.get("pre_context", 8.0))
+        post_payoff = float(rules.get("post_payoff", 10.0))
+        start = max(0.0, arc.peak_time - pre_context)
+        end = arc.peak_time + post_payoff
+        if (end - start) < min_dur:
+            end = start + min_dur
+        if (end - start) > max_dur:
+            end = start + max_dur
 
     # Snap to natural speech boundaries
     start = editing_brain.find_nearest_word_boundary(start, transcript_data, search_window=2.0)

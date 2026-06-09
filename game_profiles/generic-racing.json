@@ -1,0 +1,128 @@
+{
+  "game_id": "generic-racing",
+  "game_name": "Generic Racing Game",
+  "genre": "racing",
+  "pacing_style": "racing",
+  "version": "1.0.0",
+  "thresholds": {
+    "start_threshold": 0.38,
+    "intensity_threshold": 0.38,
+    "prominence_threshold": 0.04,
+    "surprise_payoff_threshold": 0.20
+  },
+  "weights": {
+    "motion": 0.55,
+    "audio": 0.20,
+    "speech": 0.05,
+    "momentum": 0.85,
+    "momentum_bonus_cap": 0.25,
+    "persistence_bonus_cap": 0.15
+  },
+  "clip_rules": {
+    "min_duration": 20,
+    "max_duration": 60,
+    "pre_context": 8.0,
+    "post_payoff": 10.0
+  },
+  "priority_events": ["drift", "crash", "near_miss", "overtake", "speed_burst"],
+  "ignore_states": ["menu", "loading", "replay"],
+  "context_rules": {
+    "expansion_buffer_start": 8.0,
+    "expansion_buffer_end": 5.0,
+    "min_clip_duration": 10.0,
+    "max_clip_duration": 60.0,
+    "merge_threshold": 6.0,
+    "pacing_style": "racing"
+  },
+  "score_weights": {
+    "speech": 0.10,
+    "audio": 0.30,
+    "visual": 0.40,
+    "emotion": 0.20
+  },
+  "arc_labels": {
+    "spike":     "Epic Crash / Wipeout",
+    "tension":   "Close Race Duel",
+    "comedy":    "Hilarious Spin-Out",
+    "drama":     "Photo Finish",
+    "triumph":   "Podium Finish",
+    "discovery": "Shortcut Discovery",
+    "drift":     "Perfect Drift Chain",
+    "crash":     "Spectacular Crash",
+    "near_miss": "Heart-Stopping Near Miss",
+    "overtake":  "Last-Second Overtake",
+    "speed_burst": "Nitro Speed Burst",
+    "HIGH_SPEED": "High Speed Run",
+    "DRIFT": "Perfect Drift Chain",
+    "CRASH": "Spectacular Crash",
+    "SPEED_BURST": "Nitro Speed Burst",
+    "RACING_MOMENT": "Racing Momentum"
+  },
+  "clip_prompt_templates": {
+    "spike":       "a dramatic high-speed crash or collision in a racing game: {context}",
+    "tension":     "two cars racing side-by-side battling for position on a racetrack: {context}",
+    "comedy":      "a funny spin-out or unexpected racing fail with the car flying off track: {context}",
+    "drama":       "a nail-biting photo finish in a racing game with cars crossing the line: {context}",
+    "triumph":     "a player celebrating a first-place victory on the podium in a racing game: {context}",
+    "discovery":   "a player finding a hidden shortcut or alternate route in a racing game: {context}",
+    "drift":       "a car performing a long controlled drift through a series of corners: {context}",
+    "crash":       "a spectacular multi-car pileup or barrier crash at high speed: {context}",
+    "near_miss":   "a car narrowly avoiding a crash at high speed with millimeters to spare: {context}",
+    "overtake":    "a car overtaking a rival on the inside of a tight corner: {context}",
+    "speed_burst": "a car activating nitro boost and surging past opponents at extreme speed: {context}",
+    "HIGH_SPEED": "a car holding a high-speed racing line with strong forward momentum: {context}",
+    "DRIFT": "a car performing a long controlled drift through a corner sequence: {context}",
+    "CRASH": "a racing car crashing, colliding, or losing control at speed: {context}",
+    "SPEED_BURST": "a car accelerating hard or using boost in a racing game: {context}",
+    "RACING_MOMENT": "a cinematic racing moment with sustained speed and motion: {context}"
+  },
+  "ignore_zones": {
+    "flat_motion_threshold": 0.04,
+    "flat_audio_threshold": 0.04,
+    "min_flat_duration": 12
+  },
+  "event_rules": [
+    {
+      "event_type": "drift",
+      "requires": {"lateral_flow_min": 0.3, "speed_min": 0.4},
+      "score_boost": 1.2,
+      "description": "High lateral optical flow with sustained speed indicates drifting"
+    },
+    {
+      "event_type": "crash",
+      "requires": {"motion_spike_min": 0.8, "audio_spike_min": 0.6},
+      "score_boost": 1.5,
+      "description": "Sudden motion and audio spike indicates a crash or collision"
+    },
+    {
+      "event_type": "near_miss",
+      "requires": {"motion_spike_min": 0.5, "camera_shake_min": 0.3},
+      "score_boost": 1.3,
+      "description": "Brief high motion with camera shake but no crash audio"
+    },
+    {
+      "event_type": "overtake",
+      "requires": {"tracked_objects_min": 1, "lateral_flow_min": 0.2},
+      "score_boost": 1.1,
+      "description": "Detected vehicle nearby with lateral movement indicates passing"
+    },
+    {
+      "event_type": "speed_burst",
+      "requires": {"speed_delta_min": 0.3, "motion_energy_min": 0.5},
+      "score_boost": 1.0,
+      "description": "Sudden speed increase with forward motion indicates nitro or boost"
+    }
+  ],
+  "spatial_rules": {
+    "track_boundary_zone": {
+      "x_min": 0.0, "y_min": 0.8,
+      "x_max": 1.0, "y_max": 1.0,
+      "description": "Lower screen area often contains HUD speedometer and map"
+    },
+    "rearview_zone": {
+      "x_min": 0.35, "y_min": 0.0,
+      "x_max": 0.65, "y_max": 0.15,
+      "description": "Top center area often shows rearview mirror in cockpit view"
+    }
+  }
+}

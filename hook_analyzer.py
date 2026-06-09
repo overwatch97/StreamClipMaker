@@ -121,7 +121,8 @@ def analyze_multimodal_highlights(
         timeline=timeline,
         transcript_data=transcript_data,
         genre=profile.genre,
-        pacing_style=profile.context_rules.get("pacing_style"),
+        pacing_style=profile.pacing_style or profile.context_rules.get("pacing_style"),
+        profile=profile,
     )
     print(f"  → {len(arcs)} event moments detected.", flush=True)
 
@@ -131,8 +132,8 @@ def analyze_multimodal_highlights(
         print("\n  🚨 DIAGNOSTIC — Zero moments survived quality filtering:", flush=True)
         print(f"     Peak score detected in stream : {stats.peak_score_seen:.4f}", flush=True)
         from pacing_profiles import get_pacing_profile, resolve_pacing_style
-        _style = resolve_pacing_style(profile.genre, profile.context_rules.get("pacing_style"))
-        _thresh = get_pacing_profile(_style)
+        _style = resolve_pacing_style(profile.genre, profile.pacing_style or profile.context_rules.get("pacing_style"))
+        _thresh = fusion_engine._thresholds if profile.genre == "racing" else get_pacing_profile(_style)
         print(f"     Pacing style used             : {_style}", flush=True)
         print(f"     Start threshold required      : {_thresh['start_threshold']:.4f}", flush=True)
         print(f"     Min intensity required        : {_thresh['min_intensity']:.4f}", flush=True)

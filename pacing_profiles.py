@@ -63,6 +63,18 @@ PACING_PROFILES: Dict[str, Dict[str, Any]] = {
         "fallback_n":           2,
         "description": "Balanced profile for RPGs and mixed open-world games",
     },
+
+    # Racing games: sustained speed and drift chains form smoother curves than FPS spikes.
+    "racing": {
+        "start_threshold":      0.38,
+        "end_threshold":        0.28,
+        "min_prominence":       0.04,
+        "min_intensity":        0.38,
+        "min_surprise_payoff":  0.20,
+        "percentile_floor":     65,
+        "fallback_n":           4,
+        "description": "Tuned for racing games with sustained momentum and cinematic pacing",
+    },
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -76,6 +88,9 @@ GENRE_TO_PACING: Dict[str, str] = {
     "battle-royale":          "fps",
     "hero-shooter":           "fps",
     "arena-shooter":          "fps",
+
+    # Racing
+    "racing":                 "racing",
 
     # Cinematic / narrative
     "open-world-adventure":   "cinematic",

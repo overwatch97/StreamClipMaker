@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, SkipBack, SplitSquareHorizontal, Trophy, Star } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Play, Pause, SkipBack, SplitSquareHorizontal, Trophy } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function VariantComparison() {
@@ -9,6 +9,8 @@ export default function VariantComparison() {
   const [loading, setLoading] = useState(true);
   
   const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
   const videoRefA = useRef<HTMLVideoElement>(null);
   const videoRefB = useRef<HTMLVideoElement>(null);
 
@@ -60,15 +62,21 @@ export default function VariantComparison() {
     setTimeout(() => setWinnerFlash(null), 800);
 
     let winnerId = null;
-    if (winner === 'A') winnerId = variantA.variant_id;
-    if (winner === 'B') winnerId = variantB.variant_id;
+    if (winner === 'A') winnerId = variantA.clip_id;
+    if (winner === 'B') winnerId = variantB.clip_id;
 
     if (winnerId) {
       try {
-        await fetch(`http://localhost:8000/api/feedback/${winnerId}`, {
+        await fetch(`http://localhost:8000/api/review/${winnerId}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rating: 'BEST', tags: 'A/B Winner' })
+          body: JSON.stringify({ 
+            session_id: 'ab_test_session',
+            score: 'BEST', 
+            tags: ['A/B Winner'],
+            review_time_ms: 0,
+            replay_count: 0
+          })
         });
       } catch (err) {
         console.error("Failed to submit A/B feedback", err);
@@ -132,18 +140,20 @@ export default function VariantComparison() {
           <div className="flex-1 bg-black relative">
             <video 
               ref={videoRefA}
-              src={`http://localhost:8000/api/video/${variantA.variant_id}`}
+              src={`http://localhost:8000/api/video/${variantA.clip_id}`}
               className="w-full h-full object-contain"
               onPlay={() => setIsPlaying(true)}
               onPause={() => setIsPlaying(false)}
+              onTimeUpdate={() => setCurrentTime(videoRefA.current?.currentTime ?? 0)}
+              onLoadedMetadata={() => setDuration(videoRefA.current?.duration ?? 0)}
             />
           </div>
           <div className="p-4 border-t border-gray-800 bg-surface">
             <div className="flex justify-between items-center mb-2">
-              <span className="text-xs text-gray-500 uppercase tracking-wider">Hook Strategy</span>
-              <span className="text-xs bg-gray-800 px-2 py-0.5 rounded text-gray-300">{variantA.caption_style}</span>
+              <span className="text-xs text-gray-500 uppercase tracking-wider">Variant Type</span>
+              <span className="text-xs bg-gray-800 px-2 py-0.5 rounded text-gray-300">{variantA.variant_type}</span>
             </div>
-            <p className="text-lg font-medium text-white italic">"{variantA.hook}"</p>
+            <p className="text-lg font-medium text-white italic">"{variantA.generation_reason}"</p>
           </div>
         </div>
 
@@ -153,16 +163,16 @@ export default function VariantComparison() {
           <div className="flex-1 bg-black relative">
             <video 
               ref={videoRefB}
-              src={`http://localhost:8000/api/video/${variantB.variant_id}`}
+              src={`http://localhost:8000/api/video/${variantB.clip_id}`}
               className="w-full h-full object-contain"
             />
           </div>
           <div className="p-4 border-t border-gray-800 bg-surface">
             <div className="flex justify-between items-center mb-2">
-              <span className="text-xs text-gray-500 uppercase tracking-wider">Hook Strategy</span>
-              <span className="text-xs bg-gray-800 px-2 py-0.5 rounded text-gray-300">{variantB.caption_style}</span>
+              <span className="text-xs text-gray-500 uppercase tracking-wider">Variant Type</span>
+              <span className="text-xs bg-gray-800 px-2 py-0.5 rounded text-gray-300">{variantB.variant_type}</span>
             </div>
-            <p className="text-lg font-medium text-white italic">"{variantB.hook}"</p>
+            <p className="text-lg font-medium text-white italic">"{variantB.generation_reason}"</p>
           </div>
         </div>
       </div>
@@ -181,11 +191,11 @@ export default function VariantComparison() {
         <input 
           type="range" 
           min="0" 
-          max={videoRefA.current?.duration || 100} 
+          max={duration || 100} 
           step="0.01"
           className="flex-1 h-2 bg-gray-800 rounded-lg appearance-none cursor-pointer"
           onChange={handleSeek}
-          value={videoRefA.current?.currentTime || 0}
+          value={currentTime}
         />
 
         <div className="flex items-center gap-3 ml-auto border-l border-gray-800 pl-6">
